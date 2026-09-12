@@ -418,3 +418,228 @@ async function executeClaimFees() {
     btn.innerHTML = "<span>Transferir Ganancias a Tesorería</span>";
   }
 }
+
+// =================================================================
+// WEB3 & METAMASK INTEGRATION (ARBITRUM SEPOLIA)
+// =================================================================
+const ARB_SEPOLIA_CHAIN_ID = 421614;
+const ARB_SEPOLIA_HEX = "0x66eee";
+const VAULT_CONTRACT_ADDRESS = "0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0";
+const USDT_CONTRACT_ADDRESS = "0x900A96C51aac4EB8aF5FDa39bc0Ef13ADBe88B44";
+
+const ERC20_ABI = [
+  "function balanceOf(address account) external view returns (uint256)",
+  "function allowance(address owner, address spender) external view returns (uint256)",
+  "function approve(address spender, uint256 amount) external returns (bool)",
+  "function decimals() external view returns (uint8)"
+];
+
+const VAULT_ABI = [
+  "function deposit(uint256 grossAmount, bytes32 stealthPubView, bytes32 stealthPubSpend) external",
+  "function depositFeeBps() external view returns (uint256)",
+  "function accumulatedFees() external view returns (uint256)",
+  "function getCollateralBalance() external view returns (uint256)",
+  "function getCirculatingBacking() external view returns (uint256)"
+];
+
+let web3Provider = null;
+let web3Signer = null;
+let web3UserAddress = null;
+
+// Connect MetaMask
+async function connectMetaMask() {
+  if (typeof window.ethereum === "undefined") {
+    showToast("MetaMask no detectado. Instala MetaMask para interactuar.", "error");
+    window.open("https://metamask.io/download/", "_blank");
+    return;
+  }
+
+  try {
+    web3Provider = new ethers.BrowserProvider(window.ethereum);
+    const accounts = await web3Provider.send("eth_requestAccounts", []);
+    if (!accounts || accounts.length === 0) {
+      showToast("No se seleccionó ninguna cuenta en MetaMask", "error");
+      return;
+    }
+
+    web3Signer = await web3Provider.getSigner();
+    web3UserAddress = await web3Signer.getAddress();
+
+    // Verify & Switch Network to Arbitrum Sepolia
+    const network = await web3Provider.getNetwork();
+    if (Number(network.chainId) !== ARB_SEPOLIA_CHAIN_ID) {
+      await switchOrAddArbitrumSepolia();
+    }
+
+    await updateWeb3UI();
+    showToast("MetaMask conectado a Arbitrum Sepolia", "success");
+  } catch (err) {
+    console.error("Error conectando MetaMask:", err);
+    showToast(err.message || "Error al conectar MetaMask", "error");
+  }
+}
+
+// Switch or Add Arbitrum Sepolia network to MetaMask
+async function switchOrAddArbitrumSepolia() {
+  try {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: ARB_SEPOLIA_HEX }]
+    });
+  } catch (switchError) {
+    if (switchError.code === 4902) {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: ARB_SEPOLIA_HEX,
+          chainName: "Arbitrum Sepolia",
+          nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+          rpcUrls: ["https://sepolia-rollup.arbitrum.io/rpc"],
+          blockExplorerUrls: ["https://sepolia.arbiscan.io"]
+        }]
+      });
+    } else {
+      throw switchError;
+    }
+  }
+}
+
+// Update UI elements with MetaMask account and balances
+async function updateWeb3UI() {
+  if (!web3UserAddress || !web3Provider) return;
+
+  const shortAddr = `${web3UserAddress.slice(0, 6)}...${web3UserAddress.slice(-4)}`;
+  const statusBtn = document.getElementById("btn-connect-metamask");
+  const statusText = document.getElementById("metamask-status-text");
+  if (statusBtn && statusText) {
+    statusText.textContent = shortAddr;
+    statusBtn.classList.remove("border-amber-500/40", "text-amber-300");
+    statusBtn.classList.add("border-emerald-500/50", "text-emerald-300", "bg-emerald-950/40");
+  }
+
+  try {
+    const ethBal = await web3Provider.getBalance(web3UserAddress);
+    const formattedEth = parseFloat(ethers.formatEther(ethBal)).toFixed(4);
+
+    const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS, ERC20_ABI, web3Provider);
+    const usdtBal = await usdtContract.balanceOf(web3UserAddress);
+    const formattedUsdt = parseFloat(ethers.formatUnits(usdtBal, 6)).toFixed(2);
+
+    const web3InfoBox = document.getElementById("web3-wallet-info");
+    if (web3InfoBox) {
+      web3InfoBox.classList.remove("hidden");
+      document.getElementById("web3-user-address").textContent = shortAddr;
+      document.getElementById("web3-usdt-balance").textContent = `${formattedUsdt} USDT`;
+      document.getElementById("web3-eth-balance").textContent = `${formattedEth} ETH`;
+    }
+  } catch (e) {
+    console.error("Error leyendo balances Web3:", e);
+  }
+}
+
+// Helper: Generate a fresh stealth address and auto-paste
+async function generateAndUseNewStealthAddress() {
+  await generateWallet();
+  useCurrentWalletAsRecipient();
+}
+
+// Execute MetaMask Deposit to CryptoPegVault
+async function executeMetaMaskDeposit() {
+  if (!web3Signer) {
+    await connectMetaMask();
+    if (!web3Signer) return;
+  }
+
+  const grossVal = parseFloat(document.getElementById("deposit-amount").value);
+  let recipient = document.getElementById("deposit-recipient").value.trim();
+
+  if (!grossVal || grossVal <= 0) {
+    showToast("Ingresa un monto válido en USDT a depositar", "error");
+    return;
+  }
+
+  // If no stealth recipient provided, generate one automatically
+  if (!recipient) {
+    await generateAndUseNewStealthAddress();
+    recipient = document.getElementById("deposit-recipient").value.trim();
+  }
+
+  if (!recipient.startsWith("STX") || recipient.length !== 131) {
+    showToast("La dirección furtiva debe ser una clave DKSAP válida (STX... de 131 caracteres)", "error");
+    return;
+  }
+
+  const stealthSpend = "0x" + recipient.substring(3, 67);
+  const stealthView = "0x" + recipient.substring(67, 131);
+  const depositAmountUnits = ethers.parseUnits(grossVal.toString(), 6);
+
+  const btn = document.getElementById("btn-deposit-metamask");
+  const origHtml = btn.innerHTML;
+  btn.disabled = true;
+
+  try {
+    const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS, ERC20_ABI, web3Signer);
+
+    // Step 1: Check allowance
+    btn.innerHTML = `<span class="animate-spin inline-block mr-2">🔄</span> 1/2: Verificando / Aprobando USDT...`;
+    const currentAllowance = await usdtContract.allowance(web3UserAddress, VAULT_CONTRACT_ADDRESS);
+
+    if (currentAllowance < depositAmountUnits) {
+      showToast("Confirma la aprobación de USDT en MetaMask...", "success");
+      const approveTx = await usdtContract.approve(VAULT_CONTRACT_ADDRESS, depositAmountUnits);
+      btn.innerHTML = `<span class="animate-spin inline-block mr-2">⏳</span> Esperando confirmación de aprobación en Arbitrum...`;
+      await approveTx.wait();
+      showToast("¡USDT Aprobado con éxito! Ahora confirma el depósito...", "success");
+    }
+
+    // Step 2: Execute deposit
+    btn.innerHTML = `<span class="animate-spin inline-block mr-2">🚀</span> 2/2: Confirmando depósito en CryptoPegVault...`;
+    const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, VAULT_ABI, web3Signer);
+    const depositTx = await vaultContract.deposit(depositAmountUnits, stealthView, stealthSpend);
+
+    btn.innerHTML = `<span class="animate-spin inline-block mr-2">⛓️</span> Minando bloque en Arbitrum Sepolia...`;
+    showToast(`Tx enviada: ${depositTx.hash.slice(0, 14)}...`, "success");
+
+    const receipt = await depositTx.wait();
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+
+    showToast("¡Depósito en Arbitrum confirmado! El oráculo de Docker lo acuñará en segundos.", "success");
+
+    // Display banner with Arbiscan link
+    const banner = document.getElementById("last-tx-banner");
+    if (banner) {
+      banner.classList.remove("hidden");
+      const link = document.getElementById("last-tx-link");
+      link.href = `https://sepolia.arbiscan.io/tx/${depositTx.hash}`;
+      link.textContent = `Tx: ${depositTx.hash.slice(0, 14)}... (Ver en Arbiscan ↗)`;
+      document.getElementById("last-tx-block").textContent = receipt.blockNumber;
+    }
+
+    await updateWeb3UI();
+    // Wait for the oracle to process and refresh data
+    setTimeout(fetchNodeData, 4000);
+    setTimeout(fetchNodeData, 8000);
+  } catch (err) {
+    console.error("Error en depósito MetaMask:", err);
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+    showToast(err.reason || err.message || "Transacción cancelada o fallida", "error");
+  }
+}
+
+// Setup MetaMask listeners on page load
+if (typeof window !== "undefined" && window.ethereum) {
+  window.ethereum.on("accountsChanged", (accounts) => {
+    if (accounts.length > 0) {
+      web3UserAddress = accounts[0];
+      updateWeb3UI();
+    } else {
+      web3UserAddress = null;
+      location.reload();
+    }
+  });
+
+  window.ethereum.on("chainChanged", () => location.reload());
+}
+
