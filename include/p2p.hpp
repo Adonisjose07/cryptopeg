@@ -55,6 +55,9 @@ public:
     // Sincronización rápida (Initial Block Download - IBD)
     bool sync_from_peer(const std::string& peer_url);
 
+    // Sincronización proactiva hacia un par atrasado (Push Sync)
+    bool push_blocks_to_peer(const std::string& peer_url, uint64_t from_height);
+
     // Consulta de identidad local
     const std::string& get_node_id() const { return node_id_; }
     const std::string& get_local_listen_url() const { return local_listen_url_; }
@@ -73,6 +76,7 @@ private:
     std::unordered_map<std::string, PeerInfo> peers_;
 
     std::atomic<bool> is_running_{false};
+    std::atomic<bool> is_syncing_{false};
     std::thread sync_thread_;
 };
 

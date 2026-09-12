@@ -178,9 +178,13 @@ bool P2PManager::handshake_with_peer(const std::string& peer_url) {
             }
         }
 
-        // Si el par tiene una cadena más larga, sincronizar
+        // Sincronización bidireccional inteligente:
         if (remote_height > node_.get_blockchain_height()) {
+            // El par remoto tiene una cadena más larga -> Descargar (PULL)
             sync_from_peer(clean_url);
+        } else if (remote_height < node_.get_blockchain_height()) {
+            // El par remoto está desactualizado (ej. seednode reiniciado o tras caída) -> Empujar (PUSH)
+            push_blocks_to_peer(clean_url, remote_height + 1);
         }
 
         return true;
@@ -264,6 +268,17 @@ bool P2PManager::sync_from_peer(const std::string& peer_url) {
     std::string clean_url = normalize_url(peer_url);
     if (clean_url.empty()) return false;
 
+    // Evitar múltiples sincronizaciones concurrentes
+    bool expected = false;
+    if (!is_syncing_.compare_exchange_strong(expected, true)) {
+        return false;
+    }
+
+    struct SyncGuard {
+        std::atomic<bool>& flag;
+        ~SyncGuard() { flag.store(false); }
+    } guard{is_syncing_};
+
     try {
         httplib::Client cli(clean_url.c_str());
         cli.set_connection_timeout(3, 0);
@@ -314,6 +329,71 @@ bool P2PManager::sync_from_peer(const std::string& peer_url) {
         return true;
     } catch (const std::exception& e) {
         std::cerr << "[P2P SYNC EXCEPTION] " << e.what() << "\n";
+        return false;
+    }
+}
+
+bool P2PManager::push_blocks_to_peer(const std::string& peer_url, uint64_t from_height) {
+    std::string clean_url = normalize_url(peer_url);
+    if (clean_url.empty()) return false;
+
+    // Evitar múltiples sincronizaciones concurrentes
+    bool expected = false;
+    if (!is_syncing_.compare_exchange_strong(expected, true)) {
+        return false;
+    }
+
+    struct SyncGuard {
+        std::atomic<bool>& flag;
+        ~SyncGuard() { flag.store(false); }
+    } guard{is_syncing_};
+
+    try {
+        httplib::Client cli(clean_url.c_str());
+        cli.set_connection_timeout(3, 0);
+        cli.set_read_timeout(10, 0);
+
+        uint64_t my_height = node_.get_blockchain_height();
+        if (from_height > my_height) return true;
+
+        std::cout << "[P2P PUSH] Iniciando envío de bloques #" << from_height 
+                  << " -> #" << my_height << " hacia par desactualizado " << clean_url << "...\n";
+
+        size_t pushed_count = 0;
+        for (uint64_t h = from_height; h <= my_height; ++h) {
+            Block blk;
+            if (!node_.get_block(h, blk)) {
+                std::cerr << "[P2P PUSH ERROR] No se pudo leer el bloque local #" << h << "\n";
+                return false;
+            }
+
+            auto raw_bytes = blk.serialize();
+            std::string block_hex = to_hex(raw_bytes.data(), raw_bytes.size());
+            std::string block_hash_hex = to_hex(blk.hash());
+
+            json payload = {
+                {"sender_node_id", node_id_},
+                {"sender_listen_url", local_listen_url_},
+                {"height", blk.header.height},
+                {"block_hash", block_hash_hex},
+                {"block_hex", block_hex}
+            };
+
+            auto res = cli.Post("/api/v1/p2p/block", payload.dump(), "application/json");
+            if (!res || res->status != 200) {
+                std::string err_body = res ? res->body : "Timeout / Sin respuesta";
+                std::cerr << "[P2P PUSH ERROR] Rechazo de bloque #" << h 
+                          << " en " << clean_url << ": " << err_body << "\n";
+                return false;
+            }
+            pushed_count++;
+        }
+
+        std::cout << "[P2P PUSH] " << pushed_count << " bloques empujados y asimilados con éxito en " 
+                  << clean_url << ".\n";
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "[P2P PUSH EXCEPTION] " << e.what() << "\n";
         return false;
     }
 }

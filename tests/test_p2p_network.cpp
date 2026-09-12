@@ -169,6 +169,35 @@ int main() {
     std::cout << "  [OK] Consenso de 3 nodos alcanzado con 100% de coincidencia hash.\n";
 
     // -------------------------------------------------------------------------
+    // PASO 6: Sincronización Proactiva PUSH (Hacia un nodo rezagado en altura 0)
+    // -------------------------------------------------------------------------
+    std::cout << "\n[PASO 6] Probando Sincronización Proactiva PUSH hacia nuevo Nodo Delta (8088)...\n";
+    const std::string db_d = "./test_p2p_db_d";
+    cleanup_dir(db_d);
+
+    crypto::Node node_d(50, 50, db_d);
+    assert(node_d.get_blockchain_height() == 0); // Empieza solo con génesis
+
+    crypto::P2PManager p2p_d(node_d, "http://127.0.0.1:8088", "node-delta");
+    crypto::RpcServer rpc_d(node_d, "127.0.0.1", 8088);
+    rpc_d.set_p2p_manager(&p2p_d);
+    rpc_d.start_async();
+    p2p_d.start();
+
+    // Alpha (en altura 2) le empuja los bloques a Delta (en altura 0)
+    std::cout << "  -> Nodo Alpha empuja proactivamente la cadena hacia Nodo Delta (PUSH Sync)...\n";
+    bool push_ok = p2p_a.push_blocks_to_peer("http://127.0.0.1:8088", 1);
+    assert(push_ok);
+    assert(node_d.get_blockchain_height() == 2);
+    assert(crypto::to_hex(node_d.get_top_block_hash()) == crypto::to_hex(node_a.get_top_block_hash()));
+    assert(node_d.audit_system());
+    std::cout << "  [OK] Nodo Delta sincronizado a altura 2 mediante PUSH directo (100% hash match).\n";
+
+    p2p_d.stop();
+    rpc_d.stop();
+    cleanup_dir(db_d);
+
+    // -------------------------------------------------------------------------
     // Limpieza
     // -------------------------------------------------------------------------
     p2p_a.stop();
