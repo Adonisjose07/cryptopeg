@@ -66,6 +66,7 @@ public:
     uint64_t get_blockchain_height() const;
     Hash256 get_top_block_hash() const;
     bool get_block(uint64_t height, Block& block) const;
+    bool is_key_image_spent(const KeyImage& image) const;
 
     const Vault& get_vault() const { return vault_; }
     const std::vector<OneTimeOutput>& get_utxo_pool() const { return utxo_pool_; }

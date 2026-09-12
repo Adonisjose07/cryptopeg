@@ -365,6 +365,11 @@ bool Node::get_block(uint64_t height, Block& block) const {
     return db_.get_block_by_height(height, block);
 }
 
+bool Node::is_key_image_spent(const KeyImage& image) const {
+    std::lock_guard<std::mutex> lock(node_mutex_);
+    return key_image_ledger_.is_spent(image) || db_.is_key_image_spent(image);
+}
+
 bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
     std::lock_guard<std::mutex> lock(node_mutex_);
 

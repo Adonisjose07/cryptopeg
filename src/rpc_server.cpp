@@ -229,7 +229,7 @@ void RpcServer::setup_routes() {
         res.set_content(j.dump(2), "application/json");
     });
 
-    // 6. Escaneo Ligero con View-Key (Sin revelar Spend Key)
+    // 6. Escaneo de Billetera (Soporta View-Key y Spend-Key opcional para filtrar gastados)
     server_->Post("/api/v1/wallet/scan", [this](const httplib::Request& req, httplib::Response& res) {
         try {
             auto body = json::parse(req.body);
@@ -245,26 +245,62 @@ void RpcServer::setup_routes() {
             std::memcpy(scan_wallet.view_private_key.data(), v_bytes.data(), 32);
             std::memcpy(scan_wallet.spend_public_key.data(), s_bytes.data(), 32);
 
+            bool has_spend_priv = false;
+            if (body.contains("spend_private_key")) {
+                std::string spend_priv_hex = body["spend_private_key"].get<std::string>();
+                if (!spend_priv_hex.empty()) {
+                    auto sp_bytes = from_hex(spend_priv_hex);
+                    if (sp_bytes.size() == 32) {
+                        std::memcpy(scan_wallet.spend_private_key.data(), sp_bytes.data(), 32);
+                        has_spend_priv = true;
+                    }
+                }
+            }
+
             Amount total_balance = 0;
             json outputs_j = json::array();
+            json spent_outputs_j = json::array();
 
             for (const auto& u : node_.get_utxo_pool()) {
                 if (StealthProtocol::scan_output(scan_wallet, u)) {
-                    total_balance += u.amount;
-                    outputs_j.push_back(json{
+                    bool is_spent = false;
+                    if (has_spend_priv) {
+                        Key256 one_time_priv = StealthProtocol::derive_one_time_private_key(scan_wallet, u);
+                        KeyImage img = RingSignatureEngine::compute_key_image(one_time_priv, u.destination_one_time);
+                        secure_wipe(one_time_priv);
+                        is_spent = node_.is_key_image_spent(img);
+                    }
+
+                    json item = {
                         {"destination_one_time", to_hex(u.destination_one_time)},
                         {"ephemeral_public_key", to_hex(u.ephemeral_public_key)},
                         {"amount_usdt", format_usdt(u.amount)},
-                        {"amount_units", u.amount}
-                    });
+                        {"amount_units", u.amount},
+                        {"is_spent", is_spent}
+                    };
+
+                    if (is_spent) {
+                        spent_outputs_j.push_back(item);
+                    } else {
+                        total_balance += u.amount;
+                        outputs_j.push_back(item);
+                    }
                 }
+            }
+
+            // Limpieza de memoria si se usó spend_private_key
+            if (has_spend_priv) {
+                secure_wipe(scan_wallet.spend_private_key);
             }
 
             json j = {
                 {"total_balance_usdt", format_usdt(total_balance)},
                 {"total_balance_units", total_balance},
                 {"outputs_count", outputs_j.size()},
-                {"outputs", outputs_j}
+                {"outputs", outputs_j},
+                {"spent_outputs_count", spent_outputs_j.size()},
+                {"spent_outputs", spent_outputs_j},
+                {"is_watch_only", !has_spend_priv}
             };
             res.set_content(j.dump(2), "application/json");
         } catch (const std::exception& e) {

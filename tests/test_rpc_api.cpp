@@ -108,6 +108,22 @@ int main() {
     assert(tx_res["ring_size"] == 5);
     std::cout << "  [OK] Transferencia privada minada en Bloque #2. Ring Size: " << tx_res["ring_size"] << "\n";
 
+    // 7b. Test Wallet Scan for Alice (Post-Transfer con filtrado de UTXOs gastados)
+    std::cout << "[PASO 7b] Probando escaneo de Alice con spend_private_key para filtrar gastados...\n";
+    json alice_post_scan_req = {
+        {"view_private_key", alice_j["view_private_key"]},
+        {"spend_public_key", alice_j["spend_public_key"]},
+        {"spend_private_key", alice_j["spend_private_key"]}
+    };
+    res = cli.Post("/api/v1/wallet/scan", alice_post_scan_req.dump(), "application/json");
+    assert(res && res->status == 200);
+    auto alice_post_res = json::parse(res->body);
+    assert(alice_post_res["outputs_count"] == 1);
+    assert(alice_post_res["spent_outputs_count"] == 1);
+    assert(alice_post_res["total_balance_units"] == 695000000ULL); // 995 - 300 = 695
+    std::cout << "  [OK] Alice detectó cambio no gastado de " << alice_post_res["total_balance_usdt"] 
+              << " y 1 salida gastada filtrada correctamente.\n";
+
     // 7. Test Wallet Scan for Bob
     std::cout << "[PASO 8] Probando POST /api/v1/wallet/scan para Bob...\n";
     json bob_scan_req = {

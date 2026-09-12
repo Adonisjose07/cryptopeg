@@ -94,7 +94,8 @@ bool WalletManager::sync(std::string& error_msg) {
 
         json scan_req = {
             {"view_private_key", to_hex(wallet_->view_private_key)},
-            {"spend_public_key", to_hex(wallet_->spend_public_key)}
+            {"spend_public_key", to_hex(wallet_->spend_public_key)},
+            {"spend_private_key", to_hex(wallet_->spend_private_key)}
         };
 
         auto res = cli.Post("/api/v1/wallet/scan", scan_req.dump(), "application/json");

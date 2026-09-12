@@ -258,6 +258,49 @@ async function executeDeposit() {
   }
 }
 
+// Local cache for spent outputs to maintain 100% privacy without exposing spend_private_key to remote nodes
+function markUtxoSpentLocally(pubkey) {
+  if (!pubkey) return;
+  try {
+    const spent = JSON.parse(localStorage.getItem("cryptopeg_spent_utxos") || "[]");
+    if (!spent.includes(pubkey)) {
+      spent.push(pubkey);
+      localStorage.setItem("cryptopeg_spent_utxos", JSON.stringify(spent));
+    }
+  } catch (e) {}
+}
+
+function unmarkUtxoSpentLocally(pubkey) {
+  if (!pubkey) return;
+  try {
+    let spent = JSON.parse(localStorage.getItem("cryptopeg_spent_utxos") || "[]");
+    spent = spent.filter(p => p !== pubkey);
+    localStorage.setItem("cryptopeg_spent_utxos", JSON.stringify(spent));
+  } catch (e) {}
+}
+
+function isUtxoSpentLocally(pubkey) {
+  if (!pubkey) return false;
+  try {
+    const spent = JSON.parse(localStorage.getItem("cryptopeg_spent_utxos") || "[]");
+    return spent.includes(pubkey);
+  } catch (e) {
+    return false;
+  }
+}
+
+function manuallyMarkSpent(pubkey) {
+  markUtxoSpentLocally(pubkey);
+  showToast("Salida archivada como gastada", "info");
+  scanWalletBalance();
+}
+
+function manuallyUnmarkSpent(pubkey) {
+  unmarkUtxoSpentLocally(pubkey);
+  showToast("Salida restaurada a disponibles", "success");
+  scanWalletBalance();
+}
+
 // Generate Stealth Wallet
 async function generateWallet() {
   try {
@@ -272,7 +315,7 @@ async function generateWallet() {
     document.getElementById("w-spend-priv").textContent = data.spend_private_key;
     document.getElementById("w-view-priv").textContent = data.view_private_key;
 
-    // Auto populate scanner
+    // Auto populate scanner (Solo View-Key para 100% de confidencialidad)
     document.getElementById("scan-view-priv").value = data.view_private_key;
     document.getElementById("scan-spend-pub").value = data.spend_public_key;
 
@@ -294,11 +337,12 @@ function useCurrentWalletAsRecipient() {
   }
 }
 
-// Scan Wallet Balance by View-Key
+// Scan Wallet Balance by View-Key (Sin exponer Spend-Key al nodo)
 async function scanWalletBalance() {
   const btn = document.getElementById("btn-scan");
   const viewPrivInput = document.getElementById("scan-view-priv");
   const spendPubInput = document.getElementById("scan-spend-pub");
+
   const viewPriv = viewPrivInput.value.trim();
   const spendPub = spendPubInput.value.trim();
 
@@ -320,28 +364,49 @@ async function scanWalletBalance() {
   btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-[#161C24] inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Escaneando Ledger LMDB...`;
 
   try {
+    const payload = {
+      view_private_key: viewPriv,
+      spend_public_key: spendPub
+    };
+
     const res = await fetch("/api/v1/wallet/scan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ view_private_key: viewPriv, spend_public_key: spendPub })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Fallo al escanear");
 
+    // Filtrar localmente en el navegador según las salidas que este usuario ya gastó
+    const allOutputs = [...(data.outputs || []), ...(data.spent_outputs || [])];
+    const activeOutputs = [];
+    const spentOutputs = [];
+    let activeTotalUnits = 0;
+
+    for (const o of allOutputs) {
+      if (isUtxoSpentLocally(o.destination_one_time) || o.is_spent) {
+        spentOutputs.push(o);
+      } else {
+        activeOutputs.push(o);
+        activeTotalUnits += Number(o.amount_units || 0);
+      }
+    }
+
+    const activeTotalUsdt = (activeTotalUnits / 1000000).toFixed(6) + " USDT";
+
     document.getElementById("scan-results").classList.remove("hidden");
-    document.getElementById("scan-total-bal").textContent = data.total_balance_usdt;
-    document.getElementById("scan-out-count").textContent = data.outputs_count;
+    document.getElementById("scan-total-bal").textContent = activeTotalUsdt;
+    document.getElementById("scan-out-count").textContent = activeOutputs.length;
 
     const list = document.getElementById("scan-utxo-list");
-    // Estado Vacío de Resultados
-    if (data.outputs.length === 0) {
+    if (activeOutputs.length === 0) {
       list.innerHTML = `
         <div class="bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-6 rounded-xl text-center space-y-1">
-          <div class="text-xs font-semibold text-[#F9FAFB]">Sin Salidas Detectadas</div>
-          <div class="text-xs text-[#919EAB]">No se encontraron UTXOs activos asociados a este par de claves.</div>
+          <div class="text-xs font-semibold text-[#F9FAFB]">Sin Salidas Disponibles</div>
+          <div class="text-xs text-[#919EAB]">No se encontraron UTXOs activos disponibles para gastar.</div>
         </div>`;
     } else {
-      list.innerHTML = data.outputs.map(o => `
+      list.innerHTML = activeOutputs.map(o => `
         <div class="bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
           <div>
             <div class="font-bold text-[#00A76F] mono text-sm">${o.amount_usdt}</div>
@@ -349,15 +414,46 @@ async function scanWalletBalance() {
               Destino P: ${o.destination_one_time}
             </div>
           </div>
-          <div class="flex space-x-2 shrink-0">
+          <div class="flex items-center space-x-2 shrink-0">
             <button onclick="copyToTxForm('${o.destination_one_time}')" class="bg-[#8E33FF]/15 hover:bg-[#8E33FF]/25 text-[#8E33FF] border border-[#8E33FF]/30 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer">Usar para Transferir</button>
             <button onclick="copyToWithdrawForm('${o.destination_one_time}')" class="bg-[#00B8D9]/15 hover:bg-[#00B8D9]/25 text-[#00B8D9] border border-[#00B8D9]/30 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer">Usar para Retirar</button>
+            <button onclick="manuallyMarkSpent('${o.destination_one_time}')" title="Marcar como consumida" class="bg-[#161C24] hover:bg-[#FF5630]/20 text-[#919EAB] hover:text-[#FF5630] border border-[rgba(145,158,171,0.16)] hover:border-[#FF5630]/30 px-2 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer">Descartar</button>
           </div>
         </div>
       `).join("");
     }
 
-    showToast("Escaneo completado: " + data.total_balance_usdt + " detectados", "success");
+    // Historial de Salidas Gastadas
+    const spentSection = document.getElementById("scan-spent-section");
+    const spentList = document.getElementById("scan-spent-list");
+    const spentCount = document.getElementById("scan-spent-count");
+    if (spentSection && spentList) {
+      if (spentOutputs.length > 0) {
+        spentSection.classList.remove("hidden");
+        if (spentCount) spentCount.textContent = spentOutputs.length;
+        spentList.innerHTML = spentOutputs.map(o => `
+          <div class="bg-[#161C24]/60 border border-[rgba(145,158,171,0.12)] p-3 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs opacity-75">
+            <div>
+              <div class="flex items-center space-x-2">
+                <span class="line-through text-[#919EAB] mono text-sm">${o.amount_usdt}</span>
+                <span class="text-[10px] bg-[#FF5630]/15 text-[#FF5630] font-bold px-2 py-0.5 rounded border border-[#FF5630]/30 uppercase">CONSUMIDA</span>
+              </div>
+              <div class="text-[11px] text-[#637381] mono select-all truncate max-w-md mt-0.5" title="${o.destination_one_time}">
+                Destino P: ${o.destination_one_time}
+              </div>
+            </div>
+            <div class="flex items-center space-x-2 shrink-0">
+              <span class="text-[11px] text-[#919EAB] italic">Gastada</span>
+              <button onclick="manuallyUnmarkSpent('${o.destination_one_time}')" class="text-[10px] text-[#00A76F] hover:underline cursor-pointer">Restaurar</button>
+            </div>
+          </div>
+        `).join("");
+      } else {
+        spentSection.classList.add("hidden");
+      }
+    }
+
+    showToast("Escaneo completado: " + activeTotalUsdt + " disponibles", "success");
   } catch (err) {
     showToast(err.message, "error");
   } finally {
@@ -437,6 +533,7 @@ async function executeTransfer() {
     document.getElementById("res-tx-keyimg").textContent = data.key_image;
     document.getElementById("res-tx-ring").textContent = data.ring_size;
 
+    markUtxoSpentLocally(inputPub);
     showToast(`Transferencia confidencial minada en Bloque #${data.block_height}`, "success");
     fetchNodeData();
     fetchBlocks();
@@ -493,6 +590,7 @@ async function executeWithdrawal() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Fallo en retiro");
 
+    markUtxoSpentLocally(inputPub);
     renderTumblerRoutes(data);
     switchTab("tab-tumbler");
     showToast(`Retiro de ${data.net_usdt_tumbled} dispersado en ${data.total_micro_fragments} fragmentos`, "success");
