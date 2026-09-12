@@ -31,8 +31,8 @@ services:
     volumes:
       - ./data:/app/data
     networks:
-      - dokploy-network
+      - server_network
 
 networks:
-  dokploy-network:
+  server_network:
     external: true
