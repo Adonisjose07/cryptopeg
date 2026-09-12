@@ -32,6 +32,23 @@ async function main() {
   console.log(" -> Daemon Local C++:  ", NODE_DAEMON_URL);
   console.log(" -> Frecuencia Polling:", POLL_INTERVAL_MS, "ms\n");
 
+  // Esperar a que el daemon C++ local esté activo y listo
+  console.log(`[ORACLE] Verificando conexión con el nodo C++ en ${NODE_DAEMON_URL}...`);
+  for (let attempt = 1; attempt <= 20; attempt++) {
+    try {
+      const hRes = await fetch(`${NODE_DAEMON_URL}/api/v1/node/health`);
+      if (hRes.ok) {
+        console.log(`[ORACLE] [OK] Daemon local C++ conectado y respondiendo.`);
+        break;
+      }
+    } catch (e) {
+      if (attempt === 20) {
+        console.warn(`[ORACLE] [AVISO] Daemon local aún no responde tras 20s. Continuando sondeo en segundo plano...`);
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+
   const provider = new ethers.JsonRpcProvider(ARBITRUM_RPC_URL);
   const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, provider);
 

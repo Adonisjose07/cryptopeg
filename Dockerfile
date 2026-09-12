@@ -41,6 +41,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     liblmdb0 \
     ca-certificates \
+    curl \
+    nodejs \
+    npm \
+    dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -58,6 +62,13 @@ COPY --from=builder /build/build/bin/test_mnemonic_wallet /app/test_mnemonic_wal
 COPY --from=builder /build/build/bin/test_p2p_network /app/test_p2p_network
 COPY --from=builder /build/public /app/public
 
+# Copy contracts & oracle service
+COPY contracts/ /app/contracts/
+RUN cd /app/contracts && npm install --omit=dev --no-audit --no-fund
+
+COPY entrypoint.sh /app/entrypoint.sh
+RUN dos2unix /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
 EXPOSE 8080
 
-ENTRYPOINT ["/app/crypto_node"]
+ENTRYPOINT ["/app/entrypoint.sh"]

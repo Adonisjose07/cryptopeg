@@ -11,7 +11,7 @@ cache/
 node_modules/
 
 # LMDB and node persistence data
-data/
+data*/
 *.mdb
 *.lock
 
