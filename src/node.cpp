@@ -59,12 +59,25 @@ DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recip
     // 1. Asentar el depósito en la bóveda
     DepositReceipt receipt = vault_.deposit(usdt_gross, custom_tx_hash);
 
-    // 2. Generar el output furtivo (one-time stealth output) para el receptor con entropía pura (AUD-HIGH-02)
-    // Nunca derivar de custom_tx_hash público para garantizar 100% de desvinculación en DKSAP
+    // 2. Generar el output furtivo (one-time stealth output) para el receptor.
+    // Si viene custom_tx_hash (depósito on-chain desde Arbitrum L2), se utiliza como semilla determinista
+    // para garantizar consenso absoluto y evitar bifurcaciones (forks) cuando múltiples oráculos minan el mismo bloque.
+    Hash256 seed;
+    const Hash256* seed_ptr = nullptr;
+    if (!custom_tx_hash.empty()) {
+        crypto_generichash(
+            seed.data(), 32,
+            reinterpret_cast<const uint8_t*>(custom_tx_hash.data()),
+            custom_tx_hash.size(),
+            nullptr, 0
+        );
+        seed_ptr = &seed;
+    }
+
     OneTimeOutput utxo = StealthProtocol::create_one_time_output(
         recipient_address,
         receipt.net_shielded_tokens_minted,
-        nullptr
+        seed_ptr
     );
 
     utxo_pool_.push_back(utxo);
