@@ -32,7 +32,7 @@ public:
     explicit Vault(uint32_t deposit_fee_bps = 50, uint32_t withdraw_fee_bps = 50);
 
     // Depósito de USDT público -> Deducción comisión -> Acuñación de tokens privados 1:1
-    DepositReceipt deposit(Amount usdt_gross);
+    DepositReceipt deposit(Amount usdt_gross, const std::string& custom_tx_hash = "");
 
     // Solicitud de Retiro -> Quema de tokens privados -> Deducción comisión -> USDT neto para el mezclador
     WithdrawalReceipt request_withdrawal(Amount tokens_gross);

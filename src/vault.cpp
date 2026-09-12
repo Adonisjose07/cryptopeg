@@ -11,7 +11,7 @@ Vault::Vault(uint32_t deposit_fee_bps, uint32_t withdraw_fee_bps)
     }
 }
 
-DepositReceipt Vault::deposit(Amount usdt_gross) {
+DepositReceipt Vault::deposit(Amount usdt_gross, const std::string& custom_tx_hash) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (usdt_gross == 0) {
@@ -32,15 +32,18 @@ DepositReceipt Vault::deposit(Amount usdt_gross) {
         throw std::runtime_error("Violación crítica de invariante en depósito de bóveda.");
     }
 
-    // Generar hash de transacción simulado
-    uint8_t random_hash[32];
-    randombytes_buf(random_hash, 32);
-
     DepositReceipt receipt;
     receipt.gross_usdt_deposited = usdt_gross;
     receipt.fee_to_pool = fee;
     receipt.net_shielded_tokens_minted = net_minted;
-    receipt.tx_hash = "0x" + to_hex(random_hash, 32);
+
+    if (!custom_tx_hash.empty()) {
+        receipt.tx_hash = custom_tx_hash;
+    } else {
+        uint8_t random_hash[32];
+        randombytes_buf(random_hash, 32);
+        receipt.tx_hash = "0x" + to_hex(random_hash, 32);
+    }
 
     return receipt;
 }

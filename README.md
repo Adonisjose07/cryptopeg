@@ -243,7 +243,18 @@ El directorio `contracts/` contiene la suite de contratos en **Solidity 0.8.24**
 3. **Compatibilidad EVM:** Cualquier dirección Ethereum estándar (`0x...`) funciona de manera transparente.
 4. **Soporte de Exchanges:** Binance, OKX, Bybit, Coinbase y KuCoin admiten retiros y depósitos directos por Arbitrum One.
 
-### Despliegue y Pruebas en Testnet (Arbitrum Sepolia)
+### Contratos en Vivo en Arbitrum Sepolia
+
+* **MockUSDT Token (6 decimales):** [`0x900A96C51aac4EB8aF5FDa39bc0Ef13ADBe88B44`](https://sepolia.arbiscan.io/address/0x900A96C51aac4EB8aF5FDa39bc0Ef13ADBe88B44)
+* **CryptoPegVault:** [`0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0`](https://sepolia.arbiscan.io/address/0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0)
+
+### Roles del Nodo: ¿Validador Regular u Oráculo de Enlace?
+
+A través del archivo `.env`, cada operador decide el rol de su nodo:
+* **`ENABLE_ORACLE=false` (Modo por Defecto - Validador Regular P2P):**
+  Para el 95% de los usuarios. Valida bloques, verifica firmas RingCT MLSAG y propaga por Gossip sin consumir APIs externas ni conectarse a Arbitrum.
+* **`ENABLE_ORACLE=true` (Modo Oráculo / Bridge Watcher):**
+  Para operadores de enlace. Monitorea el Smart Contract en Arbitrum y propone los bloques de acuñación al detectar depósitos.
 
 ```bash
 cd contracts
@@ -252,8 +263,11 @@ npm install
 # Ejecutar simulación completa local (Depósito -> Quema -> Retiro con Firma -> Cobro Tesorería)
 npm test
 
-# Desplegar en Arbitrum Sepolia (gratuito con faucet)
-npm run deploy:sepolia
+# Desplegar contratos a Arbitrum Sepolia
+npm run deploy:arb-sepolia
+
+# Iniciar el servicio Oráculo de escucha en vivo
+npm run oracle
 ```
 
 ---

@@ -278,12 +278,25 @@ void RpcServer::setup_routes() {
         try {
             auto body = json::parse(req.body);
             double gross_val = body.at("gross_usdt").get<double>();
-            std::string recipient_str = body.at("recipient_stealth_address").get<std::string>();
-
             Amount gross = parse_usdt(gross_val);
-            StealthAddress recipient = StealthAddress::decode(recipient_str);
+            std::string custom_tx = body.value("tx_hash", "");
 
-            auto receipt = node_.buy_shielded(gross, recipient);
+            StealthAddress recipient;
+            if (body.contains("recipient_stealth_address")) {
+                recipient = StealthAddress::decode(body.at("recipient_stealth_address").get<std::string>());
+            } else if (body.contains("stealth_pub_view") && body.contains("stealth_pub_spend")) {
+                auto v_bytes = from_hex(body.at("stealth_pub_view").get<std::string>());
+                auto s_bytes = from_hex(body.at("stealth_pub_spend").get<std::string>());
+                if (v_bytes.size() != 32 || s_bytes.size() != 32) {
+                    throw std::invalid_argument("Claves stealth de vista y gasto deben tener 32 bytes (64 caracteres hex).");
+                }
+                std::memcpy(recipient.view_public_key.data(), v_bytes.data(), 32);
+                std::memcpy(recipient.spend_public_key.data(), s_bytes.data(), 32);
+            } else {
+                throw std::invalid_argument("Se requiere 'recipient_stealth_address' o ('stealth_pub_view' y 'stealth_pub_spend').");
+            }
+
+            auto receipt = node_.buy_shielded(gross, recipient, custom_tx);
 
             json j = {
                 {"success", true},

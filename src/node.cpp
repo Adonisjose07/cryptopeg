@@ -53,11 +53,11 @@ void Node::init_or_recover_database() {
     }
 }
 
-DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recipient_address) {
+DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recipient_address, const std::string& custom_tx_hash) {
     std::lock_guard<std::mutex> lock(node_mutex_);
 
     // 1. La bóveda recibe los USDT públicos, deduce la comisión al pool y emite el recibo 1:1
-    DepositReceipt receipt = vault_.deposit(usdt_gross);
+    DepositReceipt receipt = vault_.deposit(usdt_gross, custom_tx_hash);
 
     // 2. Generar el output furtivo (one-time stealth output) para el receptor
     OneTimeOutput utxo = StealthProtocol::create_one_time_output(
