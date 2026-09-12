@@ -6,7 +6,8 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat run scripts/test_flow.js",
-    "deploy:sepolia": "hardhat run scripts/deploy.js --network arbitrumSepolia"
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "deploy:arb-sepolia": "hardhat run scripts/deploy.js --network arbitrumSepolia"
   },
   "keywords": ["cryptopeg", "usdt", "arbitrum", "layer2", "privacy", "solidity"],
   "author": "CryptoPeg Team",

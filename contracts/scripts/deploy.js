@@ -10,8 +10,8 @@ async function main() {
 
   let usdtAddress = process.env.ARBITRUM_USDT_ADDRESS;
 
-  // Si estamos en Sepolia o red local y no se especificó un USDT, desplegamos MockUSDT
-  if (!usdtAddress || hre.network.name === "arbitrumSepolia" || hre.network.name === "hardhat") {
+  // Si estamos en Sepolia (L1 o L2) o red local y no se especificó un USDT, desplegamos MockUSDT
+  if (!usdtAddress || hre.network.name === "arbitrumSepolia" || hre.network.name === "sepolia" || hre.network.name === "hardhat") {
     console.log("1. Desplegando MockUSDT (Tether USD 6 decimales)...");
     const MockUSDT = await hre.ethers.getContractFactory("MockUSDT");
     const mockUsdt = await MockUSDT.deploy();
