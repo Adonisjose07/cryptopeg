@@ -53,7 +53,7 @@ void Node::init_or_recover_database() {
     }
 }
 
-DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recipient_address, const std::string& custom_tx_hash) {
+DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recipient_address, const std::string& custom_tx_hash, uint64_t custom_timestamp) {
     std::lock_guard<std::mutex> lock(node_mutex_);
 
     // 1. La bóveda recibe los USDT públicos, deduce la comisión al pool y emite el recibo 1:1
@@ -72,11 +72,15 @@ DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recip
     Block block;
     block.header.height = next_height;
     block.header.prev_block_hash = db_.get_top_block_hash();
-    block.header.timestamp = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch()
-        ).count()
-    );
+    if (custom_timestamp > 0) {
+        block.header.timestamp = custom_timestamp;
+    } else {
+        block.header.timestamp = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+            ).count()
+        );
+    }
     block.deposits.push_back(receipt);
     block.deposit_outputs.push_back(utxo);
     block.header.merkle_root = block.compute_merkle_root();

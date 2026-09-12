@@ -100,7 +100,8 @@ async function main() {
               gross_usdt: grossUSDT,
               stealth_pub_view: viewKeyHex,
               stealth_pub_spend: spendKeyHex,
-              tx_hash: txHash
+              tx_hash: txHash,
+              timestamp: Number(event.args.timestamp)
             })
           });
 

@@ -280,6 +280,7 @@ void RpcServer::setup_routes() {
             double gross_val = body.at("gross_usdt").get<double>();
             Amount gross = parse_usdt(gross_val);
             std::string custom_tx = body.value("tx_hash", "");
+            uint64_t custom_ts = body.value("timestamp", 0ULL);
 
             StealthAddress recipient;
             if (body.contains("recipient_stealth_address")) {
@@ -296,7 +297,7 @@ void RpcServer::setup_routes() {
                 throw std::invalid_argument("Se requiere 'recipient_stealth_address' o ('stealth_pub_view' y 'stealth_pub_spend').");
             }
 
-            auto receipt = node_.buy_shielded(gross, recipient, custom_tx);
+            auto receipt = node_.buy_shielded(gross, recipient, custom_tx, custom_ts);
 
             json j = {
                 {"success", true},

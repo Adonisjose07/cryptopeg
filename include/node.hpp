@@ -27,7 +27,7 @@ public:
     );
 
     // 1. Compra de cripto con USDT: acuñación 1:1 menos comisión que va al pool + Asentamiento en bloque LMDB
-    DepositReceipt buy_shielded(Amount usdt_gross, const StealthAddress& recipient_address, const std::string& custom_tx_hash = "");
+    DepositReceipt buy_shielded(Amount usdt_gross, const StealthAddress& recipient_address, const std::string& custom_tx_hash = "", uint64_t custom_timestamp = 0);
 
     // 2. Transferencia confidencial RingCT (DKSAP + MLSAG + Señuelos + Key Image) + Asentamiento en bloque LMDB
     ShieldedTransaction transfer_shielded(
