@@ -39,10 +39,11 @@ struct OneTimeOutput {
 
 class StealthProtocol {
 public:
-    // El emisor crea un output de un solo uso para la dirección del receptor
+    // El emisor crea un output de un solo uso para la dirección del receptor (aleatorio o determinista si hay semilla)
     static OneTimeOutput create_one_time_output(
         const StealthAddress& recipient_address,
-        Amount amount
+        Amount amount,
+        const Hash256* deterministic_seed = nullptr
     );
 
     // El receptor escanea un output en la blockchain para ver si le pertenece

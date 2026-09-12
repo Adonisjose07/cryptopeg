@@ -60,9 +60,23 @@ DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recip
     DepositReceipt receipt = vault_.deposit(usdt_gross, custom_tx_hash);
 
     // 2. Generar el output furtivo (one-time stealth output) para el receptor
+    // Si viene custom_tx_hash (depósito on-chain), se usa como semilla determinista
+    Hash256 seed;
+    const Hash256* seed_ptr = nullptr;
+    if (!custom_tx_hash.empty()) {
+        crypto_generichash(
+            seed.data(), 32,
+            reinterpret_cast<const uint8_t*>(custom_tx_hash.data()),
+            custom_tx_hash.size(),
+            nullptr, 0
+        );
+        seed_ptr = &seed;
+    }
+
     OneTimeOutput utxo = StealthProtocol::create_one_time_output(
         recipient_address,
-        receipt.net_shielded_tokens_minted
+        receipt.net_shielded_tokens_minted,
+        seed_ptr
     );
 
     utxo_pool_.push_back(utxo);

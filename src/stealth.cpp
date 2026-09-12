@@ -38,14 +38,21 @@ StealthWallet StealthWallet::generate_random() {
 
 OneTimeOutput StealthProtocol::create_one_time_output(
     const StealthAddress& recipient_address,
-    Amount amount
+    Amount amount,
+    const Hash256* deterministic_seed
 ) {
     OneTimeOutput output;
     output.amount = amount;
 
-    // 1. Emisor genera secreto efímero r
+    // 1. Emisor genera secreto efímero r (determinista si viene semilla, aleatorio si es interno)
     Key256 r;
-    crypto_core_ed25519_scalar_random(r.data());
+    if (deterministic_seed != nullptr) {
+        uint8_t hash_r[64];
+        crypto_generichash(hash_r, 64, deterministic_seed->data(), 32, nullptr, 0);
+        crypto_core_ed25519_scalar_reduce(r.data(), hash_r);
+    } else {
+        crypto_core_ed25519_scalar_random(r.data());
+    }
 
     // 2. Emisor calcula R = rG
     crypto_scalarmult_ed25519_base_noclamp(output.ephemeral_public_key.data(), r.data());
@@ -72,13 +79,13 @@ OneTimeOutput StealthProtocol::create_one_time_output(
     // 6. Destino P = hG + A
     if (crypto_core_ed25519_add(output.destination_one_time.data(), hG.data(), recipient_address.spend_public_key.data()) != 0) {
         secure_wipe(r);
+        secure_wipe(s_scalar);
         throw std::runtime_error("Fallo al sumar puntos hG + A para dirección de destino.");
     }
 
     // Limpieza de memoria
     secure_wipe(r);
     secure_wipe(rB);
-    sodium_memzero(hash_s, sizeof(hash_s));
     secure_wipe(s_scalar);
 
     return output;

@@ -107,6 +107,19 @@ int main() {
     CHECK(balance_ok, "Compromiso de Pedersen debe conservar balance");
     std::cout << "  -> Compromiso de Pedersen verificado: Sum(Inputs) == Sum(Outputs) en forma oculta.\n";
 
+    // 8. Prueba de Derivación Determinista (Multi-Oráculo)
+    std::cout << "  -> Probando derivacion determinista para oraculos multi-nodo...\n";
+    crypto::Hash256 seed1;
+    crypto_generichash(seed1.data(), 32, reinterpret_cast<const uint8_t*>("0xArbitrumSepoliaDepositTxHash"), 30, nullptr, 0);
+
+    auto det_out1 = crypto::StealthProtocol::create_one_time_output(bob.get_public_address(), 100, &seed1);
+    auto det_out2 = crypto::StealthProtocol::create_one_time_output(bob.get_public_address(), 100, &seed1);
+
+    CHECK(std::memcmp(det_out1.ephemeral_public_key.data(), det_out2.ephemeral_public_key.data(), 32) == 0, "Salidas deterministas deben tener la misma clave efímera");
+    CHECK(std::memcmp(det_out1.destination_one_time.data(), det_out2.destination_one_time.data(), 32) == 0, "Salidas deterministas deben tener el mismo destino P");
+    CHECK(crypto::StealthProtocol::scan_output(bob, det_out1), "Bob debe detectar la salida determinista");
+    std::cout << "  [OK] Derivacion determinista 100% identica y escaneable verificada.\n";
+
     std::cout << "[TEST PASSED] Todos los tests de privacidad RingCT superados con exito.\n";
     return 0;
 }
