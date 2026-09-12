@@ -214,50 +214,6 @@ function updateDepositPreview() {
   document.getElementById("prev-dep-net").textContent = net.toFixed(6) + " USDT";
 }
 
-// Execute Local / Dev Deposit
-async function executeDeposit() {
-  const btn = document.getElementById("btn-deposit");
-  const amountInput = document.getElementById("deposit-amount");
-  const recipInput = document.getElementById("deposit-recipient");
-  const gross = parseFloat(amountInput.value);
-  const recipient = recipInput.value.trim();
-
-  let hasError = false;
-  if (!gross || gross <= 0) {
-    setInputError(amountInput, true);
-    showToast("Ingresa un monto válido en USDT mayor a 0", "error");
-    hasError = true;
-  }
-  if (!recipient.startsWith("STX")) {
-    setInputError(recipInput, true);
-    showToast("Ingresa una dirección Stealth válida que inicie con STX", "error");
-    hasError = true;
-  }
-  if (hasError) return;
-
-  btn.disabled = true;
-  btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-[#F9FAFB] inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Minando Bloque en LMDB...`;
-
-  try {
-    const res = await fetch("/api/v1/vault/deposit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ gross_usdt: gross, recipient_stealth_address: recipient })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Fallo en depósito");
-
-    showToast(`¡Acuñación exitosa! Minado en Bloque #${data.block_height}`, "success");
-    fetchNodeData();
-    fetchBlocks();
-  } catch (err) {
-    showToast(err.message, "error");
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = "<span>Simular Acuñación Directa en LMDB (Dev / Offline)</span>";
-  }
-}
-
 // Local cache for spent outputs to maintain 100% privacy without exposing spend_private_key to remote nodes
 function markUtxoSpentLocally(pubkey) {
   if (!pubkey) return;
