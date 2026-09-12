@@ -20,6 +20,13 @@ struct WithdrawalReceipt {
     std::string order_id;
 };
 
+struct ClaimReceipt {
+    Amount amount_claimed;
+    Amount remaining_fee_pool;
+    std::string destination_address;
+    std::string tx_hash;
+};
+
 class Vault {
 public:
     explicit Vault(uint32_t deposit_fee_bps = 50, uint32_t withdraw_fee_bps = 50);
@@ -29,6 +36,9 @@ public:
 
     // Solicitud de Retiro -> Quema de tokens privados -> Deducción comisión -> USDT neto para el mezclador
     WithdrawalReceipt request_withdrawal(Amount tokens_gross);
+
+    // Cobro de comisiones acumuladas para la tesorería (sin tocar el colateral circulante de los usuarios)
+    ClaimReceipt claim_fees(Amount amount_to_claim, const std::string& destination_address);
 
     // Consulta de balances (en micro-USDT)
     Amount get_total_collateral() const;

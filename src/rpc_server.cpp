@@ -425,6 +425,31 @@ void RpcServer::setup_routes() {
         }
     });
 
+    // 10. Cobro de Comisiones de Tesorería (Administración del Protocolo)
+    server_->Post("/api/v1/vault/claim-fees", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = json::parse(req.body);
+            double amount_val = body.at("amount_usdt").get<double>();
+            std::string treasury_addr = body.at("treasury_address").get<std::string>();
+
+            Amount claim_amount = parse_usdt(amount_val);
+            auto receipt = node_.claim_treasury_fees(claim_amount, treasury_addr);
+
+            json j = {
+                {"success", true},
+                {"amount_claimed_usdt", format_usdt(receipt.amount_claimed)},
+                {"remaining_fee_pool_usdt", format_usdt(receipt.remaining_fee_pool)},
+                {"destination_address", receipt.destination_address},
+                {"tx_hash", receipt.tx_hash},
+                {"is_solvent_1_to_1", node_.audit_system()}
+            };
+            res.set_content(j.dump(2), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+        }
+    });
+
     // =========================================================================
     // ENDPOINTS DE RED P2P (GOSSIP, HANDSHAKE, PEERS, SYNC)
     // =========================================================================

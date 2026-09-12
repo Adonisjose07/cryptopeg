@@ -302,6 +302,42 @@ bool BlockchainDB::load_vault_state(Vault& vault) const {
     return false;
 }
 
+bool BlockchainDB::save_vault_state(const Vault& vault) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!env_) return false;
+
+    MDB_txn* txn = nullptr;
+    int rc = mdb_txn_begin(env_, nullptr, 0, &txn);
+    if (rc != 0) return false;
+
+    try {
+        std::string meta_vs = "vault_state";
+        MDB_val k_mvs, v_mvs;
+        k_mvs.mv_size = meta_vs.size();
+        k_mvs.mv_data = const_cast<char*>(meta_vs.data());
+
+        ByteWriter vw;
+        vw.write_u64(vault.get_total_collateral());
+        vw.write_u64(vault.get_circulating_shielded_supply());
+        vw.write_u64(vault.get_fee_pool_reserve());
+        auto vb = vw.take_bytes();
+        v_mvs.mv_size = vb.size();
+        v_mvs.mv_data = vb.data();
+
+        rc = mdb_put(txn, dbi_metadata_, &k_mvs, &v_mvs, 0);
+        if (rc != 0) {
+            mdb_txn_abort(txn);
+            return false;
+        }
+
+        rc = mdb_txn_commit(txn);
+        return (rc == 0);
+    } catch (...) {
+        mdb_txn_abort(txn);
+        return false;
+    }
+}
+
 void BlockchainDB::commit_block(
     const Block& block,
     const Vault& vault,

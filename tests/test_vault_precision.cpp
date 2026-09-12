@@ -32,7 +32,26 @@ int main() {
     assert(vault.audit_solvency());
     std::cout << "  -> Retiro unitario verificado con exito.\n";
 
-    // 3. Test de Estrés: 10,000 transacciones aleatorias con montos fraccionarios
+    // 3. Cobro de comisiones de tesorería (Claim Fees)
+    assert(vault.get_fee_pool_reserve() == 750'000ULL); // 0.50 USDT de dep + 0.25 USDT de retiro
+    auto claim_rec = vault.claim_fees(500'000ULL, "0x71C86576135593833950275819777174bE5b248a");
+    assert(claim_rec.amount_claimed == 500'000ULL);
+    assert(claim_rec.remaining_fee_pool == 250'000ULL);
+    assert(vault.get_fee_pool_reserve() == 250'000ULL);
+    assert(vault.audit_solvency());
+
+    // Verificar que intentar reclamar más de la reserva disponible lance excepción estricta
+    bool threw_excess = false;
+    try {
+        vault.claim_fees(300'000ULL, "0x71C86576135593833950275819777174bE5b248a");
+    } catch (const std::runtime_error&) {
+        threw_excess = true;
+    }
+    assert(threw_excess);
+    assert(vault.audit_solvency());
+    std::cout << "  -> Cobro de comisiones de tesoreria verificado con exito (solvencia 100% preservada).\n";
+
+    // 4. Test de Estrés: 10,000 transacciones aleatorias con montos fraccionarios
     std::cout << "  -> Ejecutando test de estres con 10,000 transacciones aleatorias...\n";
     std::mt19937_64 rng(42);
     std::uniform_int_distribution<crypto::Amount> dist(100, 100'000'000ULL); // desde 0.000100 a 100 USDT

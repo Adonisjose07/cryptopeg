@@ -86,6 +86,43 @@ WithdrawalReceipt Vault::request_withdrawal(Amount tokens_gross) {
     return receipt;
 }
 
+ClaimReceipt Vault::claim_fees(Amount amount_to_claim, const std::string& destination_address) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (amount_to_claim == 0) {
+        throw std::invalid_argument("El monto a reclamar de comisiones debe ser mayor a 0.");
+    }
+
+    if (destination_address.empty()) {
+        throw std::invalid_argument("La dirección de destino de tesorería no puede estar vacía.");
+    }
+
+    if (amount_to_claim > fee_pool_reserve_) {
+        throw std::runtime_error("Monto solicitado excede la reserva disponible en el pool de comisiones.");
+    }
+
+    // Deducir del colateral total y de la reserva de comisiones
+    // El suministro circulante de los usuarios permanece 100% intacto y respaldado
+    total_collateral_ -= amount_to_claim;
+    fee_pool_reserve_ -= amount_to_claim;
+
+    // Verificación estricta de solvencia tras el cobro de tesorería
+    if (total_collateral_ != (circulating_supply_ + fee_pool_reserve_)) {
+        throw std::runtime_error("Violación crítica de solvencia tras el cobro de comisiones de tesorería.");
+    }
+
+    uint8_t tx_bytes[32];
+    randombytes_buf(tx_bytes, 32);
+
+    ClaimReceipt receipt;
+    receipt.amount_claimed = amount_to_claim;
+    receipt.remaining_fee_pool = fee_pool_reserve_;
+    receipt.destination_address = destination_address;
+    receipt.tx_hash = "0x" + to_hex(tx_bytes, 32);
+
+    return receipt;
+}
+
 Amount Vault::get_total_collateral() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return total_collateral_;

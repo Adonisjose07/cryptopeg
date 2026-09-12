@@ -64,6 +64,8 @@ async function fetchNodeData() {
     document.getElementById("metric-collateral").textContent = data.vault.total_collateral_usdt;
     document.getElementById("metric-circulating").textContent = data.vault.circulating_shielded_supply;
     document.getElementById("metric-fee-pool").textContent = data.vault.fee_pool_reserve_usdt;
+    const tDisplay = document.getElementById("treasury-pool-display");
+    if (tDisplay) tDisplay.textContent = data.vault.fee_pool_reserve_usdt;
     document.getElementById("metric-height").textContent = data.blockchain_height + " bloques";
     document.getElementById("metric-utxos").textContent = data.utxo_pool_count;
 
@@ -375,4 +377,44 @@ function renderTumblerRoutes(plan) {
       </div>
     </div>
   `).join("");
+}
+
+// Execute Treasury Fee Claim
+async function executeClaimFees() {
+  const btn = document.getElementById("btn-claim-fees");
+  const amountInput = document.getElementById("claim-fee-amount");
+  const addrInput = document.getElementById("claim-fee-address");
+
+  const amount = parseFloat(amountInput.value);
+  const dest = addrInput.value.trim();
+
+  if (!amount || amount <= 0 || !dest) {
+    showToast("Ingresa un monto válido y la dirección de tesorería 0x...", "error");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-slate-950 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Procesando Retiro de Tesorería...`;
+
+  try {
+    const res = await fetch("/api/v1/vault/claim-fees", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount_usdt: amount,
+        treasury_address: dest
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Fallo al reclamar comisiones");
+
+    showToast(`Comisiones cobradas con éxito: ${data.amount_claimed_usdt} hacia ${data.destination_address.substring(0, 10)}...`, "success");
+    amountInput.value = "";
+    fetchNodeData();
+  } catch (err) {
+    showToast(err.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = "<span>Transferir Ganancias a Tesorería</span>";
+  }
 }

@@ -34,6 +34,7 @@ public:
     std::vector<OneTimeOutput> load_all_utxos() const;
 
     bool load_vault_state(Vault& vault) const;
+    bool save_vault_state(const Vault& vault);
 
     void commit_block(
         const Block& block,

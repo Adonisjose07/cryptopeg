@@ -311,6 +311,22 @@ TumblingPlan Node::withdraw_shielded(
     return plan;
 }
 
+ClaimReceipt Node::claim_treasury_fees(Amount amount_to_claim, const std::string& destination_address) {
+    std::lock_guard<std::mutex> lock(node_mutex_);
+
+    // 1. Deducir comisiones de la reserva de la bóveda
+    ClaimReceipt receipt = vault_.claim_fees(amount_to_claim, destination_address);
+
+    // 2. Persistir el nuevo estado de la bóveda en la base de datos LMDB
+    db_.save_vault_state(vault_);
+
+    std::cout << "[NODE] Comisiones de tesorería reclamadas exitosamente: " 
+              << format_usdt(receipt.amount_claimed) 
+              << " hacia " << receipt.destination_address << "\n";
+
+    return receipt;
+}
+
 bool Node::audit_system() const {
     std::lock_guard<std::mutex> lock(node_mutex_);
     return vault_.audit_solvency();

@@ -47,7 +47,10 @@ public:
         bool execute_immediately = true
     );
 
-    // 4. Validación y asimilación de bloques provenientes de la red P2P
+    // 4. Cobro administrativo de comisiones acumuladas del pool hacia la tesorería
+    ClaimReceipt claim_treasury_fees(Amount amount_to_claim, const std::string& destination_address);
+
+    // 5. Validación y asimilación de bloques provenientes de la red P2P
     bool apply_remote_block(const Block& block, std::string& error_msg);
 
     // Registro de callback cuando se mina/asienta un nuevo bloque localmente

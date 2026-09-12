@@ -136,6 +136,7 @@ La billetera interactiva (`crypto_wallet_cli`) opera con aislamiento de claves p
 | `deposit <monto>` | Deposita colateral USDT y acuña tokens privados 1:1. |
 | `transfer <dir_stealth> <monto>` | Envía fondos de forma anónima con firmas de anillo MLSAG y señuelos. |
 | `withdraw <monto> <dir_publica>` | Canjea USDT 1:1 hacia una dirección pública externa mediante el micro-tumbler. |
+| `claimfees <monto> <dir_0x>` | Reclama comisiones acumuladas del pool hacia la dirección de tesorería del protocolo. |
 | `peers` | Consulta los nodos conectados en la red P2P, alturas y latencias. |
 | `addpeer <url>` | Conecta manualmente este nodo a otro nodo validador P2P. |
 | `status` | Consulta el estado general, altura de bloques y solvencia auditada del nodo. |
@@ -190,6 +191,7 @@ El daemon expone los siguientes endpoints HTTP en el puerto `8080`:
 | `POST` | `/api/v1/vault/deposit` | Depósito colateral y acuñación 1:1 a dirección furtiva. |
 | `POST` | `/api/v1/tx/transfer` | Envío de transacción confidencial RingCT. |
 | `POST` | `/api/v1/vault/withdraw` | Retiro y activación del micro-tumbler anonimizador. |
+| `POST` | `/api/v1/vault/claim-fees` | Retiro de comisiones de tesorería del protocolo sin alterar colateral 1:1. |
 | `GET` | `/api/v1/p2p/status` | Lista de pares activos, latencias e ID de nodo. |
 | `GET` | `/api/v1/p2p/peers` | URLs de los pares conocidos para descubrimiento (PEX). |
 | `POST` | `/api/v1/p2p/peers` | Registro manual de un nuevo par vecino. |
@@ -224,6 +226,34 @@ docker run --rm --entrypoint /app/test_tumbler_mixer crypto-core-node:latest
 
 # Prueba de la API REST / JSON-RPC
 docker run --rm --entrypoint /app/test_rpc_api crypto-core-node:latest
+```
+
+---
+
+## Smart Contracts de Custodia en Arbitrum L2 (Sepolia & One)
+
+El directorio `contracts/` contiene la suite de contratos en **Solidity 0.8.24** para la custodia pública 1:1 de USDT:
+
+* **`CryptoPegVault.sol`**: Custodia colateral descentralizada con protección contra ataques de repetición (*Replay Attacks*), autorización de retiros firmada por el validador del nodo y función de cobro de comisiones para la tesorería (`claimTreasuryFees`).
+* **`MockUSDT.sol`**: Token ERC-20 idéntico al USDT oficial (6 decimales) con acuñación pública para pruebas gratuitas en la testnet **Arbitrum Sepolia**.
+
+### ¿Por qué Arbitrum L2?
+1. **Ultra-económico:** Costo promedio de transferencia ERC-20 de **\$0.001 a \$0.005 USD** por transacción.
+2. **Liquidez y Mercado Masivo:** Arbitrum One es la L2 #1 en TVL (> \$3,000M) con emisión nativa de Tether.
+3. **Compatibilidad EVM:** Cualquier dirección Ethereum estándar (`0x...`) funciona de manera transparente.
+4. **Soporte de Exchanges:** Binance, OKX, Bybit, Coinbase y KuCoin admiten retiros y depósitos directos por Arbitrum One.
+
+### Despliegue y Pruebas en Testnet (Arbitrum Sepolia)
+
+```bash
+cd contracts
+npm install
+
+# Ejecutar simulación completa local (Depósito -> Quema -> Retiro con Firma -> Cobro Tesorería)
+npm test
+
+# Desplegar en Arbitrum Sepolia (gratuito con faucet)
+npm run deploy:sepolia
 ```
 
 ---

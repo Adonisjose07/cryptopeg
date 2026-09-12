@@ -64,6 +64,8 @@ void print_help() {
               << " Transferencia confidencial con anillo RingCT y señuelos\n";
     std::cout << color::CYAN << "  withdraw <monto> <dir_publica>" << color::RESET 
               << " Canjear 1:1 USDT público vía micro-tumbler asíncrono\n";
+    std::cout << color::CYAN << "  claimfees <monto> <dir_0x>" << color::RESET 
+              << "     Reclamar comisiones acumuladas hacia la tesorería\n";
     std::cout << color::CYAN << "  status" << color::RESET 
               << "                       Consultar estado de la red, altura y solvencia del nodo\n";
     std::cout << color::CYAN << "  peers" << color::RESET 
@@ -535,6 +537,48 @@ int main(int argc, char* argv[]) {
                 } else {
                     std::cout << color::RED << "[ERROR] Retiro falló: " << err << color::RESET << "\n\n";
                 }
+            } catch (const std::exception& e) {
+                std::cout << color::RED << "[ERROR] " << e.what() << color::RESET << "\n";
+            }
+        } else if (cmd == "claimfees") {
+            if (tokens.size() < 3) {
+                std::cout << color::YELLOW << "Uso: claimfees <monto_usdt> <direccion_0x_tesoreria>\n"
+                          << "Ejemplo: claimfees 50.0 0x71C86576135593833950275819777174bE5b248a\n" << color::RESET;
+                continue;
+            }
+            try {
+                double val = std::stod(tokens[1]);
+                std::string treasury_dest = tokens[2];
+                std::cout << color::DIM << "[INFO] Solicitando retiro de comisiones de tesorería del pool...\n" << color::RESET;
+
+                httplib::Client cli(manager.get_daemon_url());
+                cli.set_connection_timeout(5, 0);
+                cli.set_read_timeout(10, 0);
+
+                json req_body = {
+                    {"amount_usdt", val},
+                    {"treasury_address", treasury_dest}
+                };
+
+                auto res = cli.Post("/api/v1/vault/claim-fees", req_body.dump(), "application/json");
+                if (!res) {
+                    std::cout << color::RED << "[ERROR] No se pudo conectar con el daemon en " << manager.get_daemon_url() << "\n" << color::RESET;
+                    continue;
+                }
+                if (res->status != 200) {
+                    auto j_err = json::parse(res->body, nullptr, false);
+                    std::string msg = j_err.is_object() && j_err.contains("error") ? j_err["error"].get<std::string>() : res->body;
+                    std::cout << color::RED << "[ERROR] Fallo al reclamar comisiones: " << msg << color::RESET << "\n\n";
+                    continue;
+                }
+
+                auto j = json::parse(res->body);
+                std::cout << color::GREEN << "[OK] Comisiones de tesorería reclamadas exitosamente.\n" << color::RESET;
+                std::cout << "  Monto Reclamado:     " << color::GREEN << j["amount_claimed_usdt"].get<std::string>() << color::RESET << "\n";
+                std::cout << "  Reserva Restante:    " << color::YELLOW << j["remaining_fee_pool_usdt"].get<std::string>() << color::RESET << "\n";
+                std::cout << "  Destino Tesorería:   " << color::CYAN << j["destination_address"].get<std::string>() << color::RESET << "\n";
+                std::cout << "  TX Hash:             " << j["tx_hash"].get<std::string>() << "\n";
+                std::cout << "  Auditoría Solvencia: " << (j["is_solvent_1_to_1"].get<bool>() ? "OK (100% Solvente)" : "FALLO") << "\n\n";
             } catch (const std::exception& e) {
                 std::cout << color::RED << "[ERROR] " << e.what() << color::RESET << "\n";
             }

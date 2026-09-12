@@ -1,0 +1,20 @@
+{
+  "name": "cryptopeg-contracts",
+  "version": "1.0.0",
+  "description": "Smart Contracts de Custodia 1:1 CryptoPeg USDT para Arbitrum L2",
+  "main": "hardhat.config.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat run scripts/test_flow.js",
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network arbitrumSepolia"
+  },
+  "keywords": ["cryptopeg", "usdt", "arbitrum", "layer2", "privacy", "solidity"],
+  "author": "CryptoPeg Team",
+  "license": "MIT",
+  "dependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/contracts": "^5.0.2",
+    "dotenv": "^16.4.5",
+    "hardhat": "^2.22.6"
+  }
+}

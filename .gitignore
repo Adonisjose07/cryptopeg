@@ -6,6 +6,9 @@ bin/
 *.so
 *.dylib
 *.exe
+artifacts/
+cache/
+node_modules/
 
 # LMDB and node persistence data
 data/
