@@ -47,11 +47,14 @@ add_library(crypto_core STATIC
     src/p2p.cpp
 )
 
+add_compile_definitions(CPPHTTPLIB_OPENSSL_SUPPORT)
+
 target_link_libraries(crypto_core
     PUBLIC
     ${LIBSODIUM_LIBRARIES}
     ${LMDB_LIBRARIES}
     OpenSSL::Crypto
+    OpenSSL::SSL
     Threads::Threads
 )
 
