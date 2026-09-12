@@ -52,29 +52,29 @@
 flowchart TB
     subgraph PublicL2["Red Pública: Arbitrum L2 (Sepolia & One)"]
         direction LR
-        UserMetaMask["Usuario (MetaMask)"] -->|1. deposit() USDT + DKSAP| VaultContract["CryptoPegVault.sol<br/>(Colateral 1:1)"]
-        VaultContract -.->|2. Evento DepositInitiated| OracleWatcher["Servicio Oráculo<br/>(oracle_listener.js)"]
-        VaultContract -->|6. claimTreasuryFees()| AdminTreasury["Billetera Tesorería<br/>(Ganancias del Protocolo)"]
+        UserMetaMask["Usuario (MetaMask)"] -->|"1. deposit() USDT + DKSAP"| VaultContract["CryptoPegVault.sol<br/>(Colateral 1:1)"]
+        VaultContract -.->|"2. Evento DepositInitiated"| OracleWatcher["Servicio Oráculo<br/>(oracle_listener.js)"]
+        VaultContract -->|"6. claimTreasuryFees()"| AdminTreasury["Billetera Tesorería<br/>(Ganancias del Protocolo)"]
     end
 
     subgraph NodeHost["Nodo Validador C++20 (Docker)"]
         direction TB
-        OracleWatcher -->|3. POST /api/v1/vault/deposit| NodeDaemon["Daemon REST / RPC<br/>(crypto_node)"]
-        NodeDaemon -->|4. Acuñar UTXO Furtivo| LMDBEngine["Base de Datos LMDB<br/>(Merkle Blockchain)"]
+        OracleWatcher -->|"3. POST /api/v1/vault/deposit"| NodeDaemon["Daemon REST / RPC<br/>(crypto_node)"]
+        NodeDaemon -->|"4. Acuñar UTXO Furtivo"| LMDBEngine["Base de Datos LMDB<br/>(Merkle Blockchain)"]
         
         BurnRequest["Orden de Retiro / Quema"] --> TumblerEngine["Micro-Tumbler<br/>(Poisson Jitter)"]
-        TumblerEngine -->|Firma Validador ECDSA| VaultContract
+        TumblerEngine -->|"Firma Validador ECDSA"| VaultContract
     end
 
     subgraph P2PMesh["Red Descentralizada P2P"]
-        LMDBEngine ==>|5. Gossip Relay| PeerA["Validador Par A"]
-        LMDBEngine ==>|Gossip Relay| PeerB["Validador Par B"]
-        PeerA -.->|IBD Sync| PeerC["Nuevo Nodo"]
+        LMDBEngine ==>|"5. Gossip Relay"| PeerA["Validador Par A"]
+        LMDBEngine ==>|"Gossip Relay"| PeerB["Validador Par B"]
+        PeerA -.->|"IBD Sync"| PeerC["Nuevo Nodo"]
     end
 
     subgraph PrivateWallet["Billetera Privada (BIP-39)"]
         Seed["Semilla 24 Palabras"] --> ViewKeyScan["Escaneo View-Key"]
-        ViewKeyScan -.->|Detecta Fondos| LMDBEngine
+        ViewKeyScan -.->|"Detecta Fondos"| LMDBEngine
     end
 
     style PublicL2 fill:#121820,stroke:#28a0f0,stroke-width:2px,color:#fff
