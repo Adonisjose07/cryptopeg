@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.hpp"
+#include "stealth.hpp"
 #include <vector>
 #include <unordered_set>
 
@@ -20,6 +21,14 @@ public:
 
     // Calcular imagen de clave: I = x * H_p(P)
     static KeyImage compute_key_image(const Key256& privkey, const Key256& pubkey);
+
+    // Computa el hash canónico completo de la transacción vinculando todas las salidas, comisión, anillo e imagen de clave (AUD-CRIT-03)
+    static Hash256 compute_canonical_tx_hash(
+        const std::vector<OneTimeOutput>& outputs,
+        Amount public_fee,
+        const std::vector<Key256>& ring_pubkeys,
+        const KeyImage& key_image
+    );
 
     // Firmar con anillo de señuelos (RingCT MLSAG)
     // message: hash de la transacción

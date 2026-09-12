@@ -138,6 +138,12 @@ contract CryptoPegVault is Ownable, ReentrancyGuard, Pausable {
         // Marcar orden como ejecutada inmediatamente antes de la transferencia
         executedWithdrawals[orderId] = true;
 
+        // Acumular la comisión de retiro retenida en la bóveda para la tesorería (AUD-HIGH-01)
+        if (withdrawFeeBps > 0 && withdrawFeeBps < 10000) {
+            uint256 fee = (amount * withdrawFeeBps) / (10000 - withdrawFeeBps);
+            accumulatedFees += fee;
+        }
+
         // Transferir USDT al destinatario
         usdtToken.safeTransfer(recipient, amount);
 

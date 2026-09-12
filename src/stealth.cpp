@@ -71,6 +71,7 @@ OneTimeOutput StealthProtocol::create_one_time_output(
     // Reducir hash a escalar válido
     Key256 s_scalar;
     crypto_core_ed25519_scalar_reduce(s_scalar.data(), hash_s);
+    sodium_memzero(hash_s, sizeof(hash_s));
 
     // 5. Calcular hG = H(S)*G
     Key256 hG;
@@ -95,13 +96,12 @@ bool StealthProtocol::scan_output(
     const StealthWallet& recipient_wallet,
     const OneTimeOutput& output
 ) {
-    // Receptor ve (R, P). Calcula bR = b * (rG) = r * (bG) = rB
+    // bR = b * R
     Key256 bR;
     if (crypto_scalarmult_ed25519_noclamp(bR.data(), recipient_wallet.view_private_key.data(), output.ephemeral_public_key.data()) != 0) {
         return false;
     }
 
-    // Hash S = H(bR) (64 bytes para reducción exacta)
     uint8_t hash_s[64];
     crypto_generichash(hash_s, 64, bR.data(), 32, nullptr, 0);
 
@@ -118,7 +118,8 @@ bool StealthProtocol::scan_output(
         return false;
     }
 
-    bool match = (std::memcmp(expected_P.data(), output.destination_one_time.data(), 32) == 0);
+    // Comparación en tiempo constante (AUD-MED-01)
+    bool match = (sodium_memcmp(expected_P.data(), output.destination_one_time.data(), 32) == 0);
 
     secure_wipe(bR);
     sodium_memzero(hash_s, sizeof(hash_s));

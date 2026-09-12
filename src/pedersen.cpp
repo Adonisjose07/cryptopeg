@@ -117,8 +117,8 @@ bool Pedersen::verify_balance_conservation(
     // Diferencia: Sum(C_in) - (Sum(C_out) + Fee*H)
     Key256 diff = sub_commitments(sum_in, total_out_with_fee);
 
-    // Debe ser exactamente igual a (Sum(r_in) - Sum(r_out))*G
-    return std::memcmp(diff.data(), excess_blinding_pubkey.data(), 32) == 0;
+    // Debe ser exactamente igual a (Sum(r_in) - Sum(r_out))*G (tiempo constante AUD-MED-01)
+    return sodium_memcmp(diff.data(), excess_blinding_pubkey.data(), 32) == 0;
 }
 
 } // namespace crypto

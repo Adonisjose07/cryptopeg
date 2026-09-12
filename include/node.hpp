@@ -67,6 +67,8 @@ public:
     Hash256 get_top_block_hash() const;
     bool get_block(uint64_t height, Block& block) const;
     bool is_key_image_spent(const KeyImage& image) const;
+    bool is_deposit_tx_processed(const std::string& tx_hash) const { return db_.is_deposit_tx_processed(tx_hash); }
+    const BlockchainDB& get_db() const { return db_; }
 
     const Vault& get_vault() const { return vault_; }
     const std::vector<OneTimeOutput>& get_utxo_pool() const { return utxo_pool_; }

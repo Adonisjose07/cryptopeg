@@ -67,6 +67,7 @@ std::string MnemonicEngine::generate_24_words() {
         oss << BIP39_WORDS[word_idx];
     }
 
+    sodium_memzero(bits_stream.data(), bits_stream.size());
     secure_wipe(entropy);
     return oss.str();
 }

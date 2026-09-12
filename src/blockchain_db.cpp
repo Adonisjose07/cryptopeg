@@ -67,6 +67,9 @@ void BlockchainDB::open(const std::string& path, size_t map_size_bytes) {
     rc = mdb_dbi_open(txn, "metadata", MDB_CREATE, &dbi_metadata_);
     if (rc != 0) { mdb_txn_abort(txn); close(); throw std::runtime_error("Fallo al abrir tabla metadata: " + std::string(mdb_strerror(rc))); }
 
+    rc = mdb_dbi_open(txn, "deposit_txs", MDB_CREATE, &dbi_deposit_txs_);
+    if (rc != 0) { mdb_txn_abort(txn); close(); throw std::runtime_error("Fallo al abrir tabla deposit_txs: " + std::string(mdb_strerror(rc))); }
+
     rc = mdb_txn_commit(txn);
     if (rc != 0) {
         close();
@@ -210,6 +213,24 @@ bool BlockchainDB::is_key_image_spent(const KeyImage& image) const {
     k.mv_data = const_cast<uint8_t*>(image.data());
 
     rc = mdb_get(txn, dbi_key_images_, &k, &v);
+    mdb_txn_abort(txn);
+
+    return (rc == 0);
+}
+
+bool BlockchainDB::is_deposit_tx_processed(const std::string& tx_hash) const {
+    if (!env_ || tx_hash.empty()) return false;
+    std::lock_guard<std::mutex> lock(db_mutex_);
+
+    MDB_txn* txn = nullptr;
+    int rc = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
+    if (rc != 0) return false;
+
+    MDB_val k, v;
+    k.mv_size = tx_hash.size();
+    k.mv_data = const_cast<char*>(tx_hash.data());
+
+    rc = mdb_get(txn, dbi_deposit_txs_, &k, &v);
     mdb_txn_abort(txn);
 
     return (rc == 0);
@@ -417,7 +438,23 @@ void BlockchainDB::commit_block(
             }
         }
 
-        // 5. Actualizar metadata: "top_height" y "vault_state"
+        // 5. Registrar hashes de depósitos procesados (Idempotencia AUD-CRIT-01/02)
+        for (const auto& dep : block.deposits) {
+            if (!dep.tx_hash.empty()) {
+                MDB_val k_dtx, v_dtx_h;
+                k_dtx.mv_size = dep.tx_hash.size();
+                k_dtx.mv_data = const_cast<char*>(dep.tx_hash.data());
+                v_dtx_h.mv_size = sizeof(be_height);
+                v_dtx_h.mv_data = &be_height;
+
+                rc = mdb_put(txn, dbi_deposit_txs_, &k_dtx, &v_dtx_h, 0);
+                if (rc != 0) {
+                    throw std::runtime_error("Fallo al indexar tx_hash de depósito en dbi_deposit_txs_: " + std::string(mdb_strerror(rc)));
+                }
+            }
+        }
+
+        // 6. Actualizar metadata: "top_height" y "vault_state"
         std::string meta_th = "top_height";
         MDB_val k_mth, v_mth;
         k_mth.mv_size = meta_th.size();

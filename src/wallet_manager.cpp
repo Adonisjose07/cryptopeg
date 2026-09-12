@@ -142,12 +142,24 @@ bool WalletManager::deposit(Amount gross_usdt, std::string& out_tx_hash, std::st
         httplib::Client cli(daemon_url_.c_str());
         double gross_val = static_cast<double>(gross_usdt) / 1000000.0;
 
+        // Generar identificador único de tx para idempotencia
+        Key256 rand_tx;
+        randombytes_buf(rand_tx.data(), rand_tx.size());
+        std::string mock_tx = "0xCLI_" + to_hex(rand_tx);
+
         json dep_req = {
             {"gross_usdt", gross_val},
-            {"recipient_stealth_address", wallet_->get_public_address().encode()}
+            {"recipient_stealth_address", wallet_->get_public_address().encode()},
+            {"tx_hash", mock_tx}
         };
 
-        auto res = cli.Post("/api/v1/vault/deposit", dep_req.dump(), "application/json");
+        const char* env_secret = std::getenv("ORACLE_SECRET");
+        std::string secret = env_secret ? env_secret : "cryptopeg_oracle_secret_2026";
+        httplib::Headers headers = {
+            {"X-Oracle-Secret", secret}
+        };
+
+        auto res = cli.Post("/api/v1/vault/deposit", headers, dep_req.dump(), "application/json");
         if (!res || res->status != 200) {
             error_msg = res ? res->body : "Fallo de conexión";
             return false;

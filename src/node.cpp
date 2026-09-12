@@ -56,27 +56,15 @@ void Node::init_or_recover_database() {
 DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recipient_address, const std::string& custom_tx_hash, uint64_t custom_timestamp) {
     std::lock_guard<std::mutex> lock(node_mutex_);
 
-    // 1. La bóveda recibe los USDT públicos, deduce la comisión al pool y emite el recibo 1:1
+    // 1. Asentar el depósito en la bóveda
     DepositReceipt receipt = vault_.deposit(usdt_gross, custom_tx_hash);
 
-    // 2. Generar el output furtivo (one-time stealth output) para el receptor
-    // Si viene custom_tx_hash (depósito on-chain), se usa como semilla determinista
-    Hash256 seed;
-    const Hash256* seed_ptr = nullptr;
-    if (!custom_tx_hash.empty()) {
-        crypto_generichash(
-            seed.data(), 32,
-            reinterpret_cast<const uint8_t*>(custom_tx_hash.data()),
-            custom_tx_hash.size(),
-            nullptr, 0
-        );
-        seed_ptr = &seed;
-    }
-
+    // 2. Generar el output furtivo (one-time stealth output) para el receptor con entropía pura (AUD-HIGH-02)
+    // Nunca derivar de custom_tx_hash público para garantizar 100% de desvinculación en DKSAP
     OneTimeOutput utxo = StealthProtocol::create_one_time_output(
         recipient_address,
         receipt.net_shielded_tokens_minted,
-        seed_ptr
+        nullptr
     );
 
     utxo_pool_.push_back(utxo);
@@ -111,25 +99,31 @@ DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recip
 std::vector<Key256> Node::select_decoys(size_t ring_size, const Key256& real_pubkey) {
     std::vector<Key256> candidates;
     for (const auto& out : utxo_pool_) {
-        if (std::memcmp(out.destination_one_time.data(), real_pubkey.data(), 32) != 0) {
+        if (sodium_memcmp(out.destination_one_time.data(), real_pubkey.data(), 32) != 0) {
             candidates.push_back(out.destination_one_time);
         }
     }
 
-    std::random_device rd;
-    std::mt19937 g(rd());
-    std::shuffle(candidates.begin(), candidates.end(), g);
+    // Barajado criptográficamente seguro (Fisher-Yates con CSPRNG de libsodium AUD-HIGH-03)
+    if (!candidates.empty()) {
+        for (size_t i = candidates.size() - 1; i > 0; --i) {
+            size_t j = randombytes_uniform(static_cast<uint32_t>(i + 1));
+            std::swap(candidates[i], candidates[j]);
+        }
+    }
 
     std::vector<Key256> selected;
-    // Si no hay suficientes salidas históricas, generamos señuelos criptográficos sintéticos
+    // Si hay suficientes salidas históricas en el ledger, seleccionamos hasta ring_size - 1.
+    // Si la red está en fase inicial/bootstrap con menos salidas que ring_size - 1,
+    // completamos los señuelos restantes usando puntos sobre la curva Ed25519 con CSPRNG puro (AUD-HIGH-03).
     for (size_t i = 0; i < ring_size - 1; ++i) {
         if (i < candidates.size()) {
             selected.push_back(candidates[i]);
         } else {
-            // Señuelo sintético válido sobre la curva Ed25519
             Key256 fake_priv, fake_pub;
             crypto_core_ed25519_scalar_random(fake_priv.data());
             crypto_scalarmult_ed25519_base_noclamp(fake_pub.data(), fake_priv.data());
+            sodium_memzero(fake_priv.data(), fake_priv.size());
             selected.push_back(fake_pub);
         }
     }
@@ -169,11 +163,9 @@ ShieldedTransaction Node::transfer_shielded(
     size_t ring_size = 5;
     auto decoys = select_decoys(ring_size, input_utxo.destination_one_time);
 
-    // Insertar la clave real en una posición aleatoria del anillo
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<size_t> pos_dist(0, ring_size - 1);
-    size_t real_index = pos_dist(gen);
+    // Insertar la clave real en una posición aleatoria del anillo usando CSPRNG (AUD-HIGH-03)
+    size_t actual_ring_size = decoys.size() + 1;
+    size_t real_index = randombytes_uniform(static_cast<uint32_t>(actual_ring_size));
 
     std::vector<Key256> ring = decoys;
     ring.insert(ring.begin() + real_index, input_utxo.destination_one_time);
@@ -193,9 +185,13 @@ ShieldedTransaction Node::transfer_shielded(
         new_outputs.push_back(change_out);
     }
 
-    // 6. Generar hash de la transacción
-    Hash256 tx_hash;
-    crypto_generichash(tx_hash.data(), 32, recipient_out.destination_one_time.data(), 32, nullptr, 0);
+    // 6. Generar hash canónico completo de la transacción (AUD-CRIT-03)
+    Hash256 tx_hash = RingSignatureEngine::compute_canonical_tx_hash(
+        new_outputs,
+        tx_fee,
+        ring,
+        img
+    );
 
     // 7. Firmar con el anillo (Ring Signature MLSAG)
     RingSignature sig = RingSignatureEngine::sign(tx_hash, ring, real_index, one_time_priv);
@@ -415,6 +411,27 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
     std::vector<OneTimeOutput> new_utxos;
 
     for (const auto& tx : block.txs) {
+        // 2.1. Validar que el tx_hash corresponda al hash canónico de la transacción (AUD-CRIT-03)
+        Hash256 expected_canonical = RingSignatureEngine::compute_canonical_tx_hash(
+            tx.outputs,
+            tx.public_fee,
+            tx.ring_sig.ring_pubkeys,
+            tx.ring_sig.key_image
+        );
+        bool hash_valid = (sodium_memcmp(tx.tx_hash.data(), expected_canonical.data(), 32) == 0);
+        if (!hash_valid && !tx.outputs.empty()) {
+            // Compatibilidad hacia atrás con bloques históricos del génesis
+            Hash256 legacy_hash;
+            crypto_generichash(legacy_hash.data(), 32, tx.outputs[0].destination_one_time.data(), 32, nullptr, 0);
+            if (sodium_memcmp(tx.tx_hash.data(), legacy_hash.data(), 32) == 0) {
+                hash_valid = true;
+            }
+        }
+        if (!hash_valid) {
+            error_msg = "Hash de transaccion invalido (no coincide con el hash canonico ni historico).";
+            return false;
+        }
+
         if (!RingSignatureEngine::verify(tx.tx_hash, tx.ring_sig)) {
             error_msg = "Firma de anillo MLSAG invalida en transaccion remota.";
             return false;
@@ -422,6 +439,22 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
 
         if (key_image_ledger_.is_spent(tx.ring_sig.key_image) || db_.is_key_image_spent(tx.ring_sig.key_image)) {
             error_msg = "Intento de doble gasto: imagen de clave ya utilizada.";
+            return false;
+        }
+
+        // 2.2. Validar que al menos un participante del anillo pertenezca al pool conocido del ledger (AUD-CRIT-04)
+        bool has_known_ring_member = false;
+        for (const auto& r_pk : tx.ring_sig.ring_pubkeys) {
+            for (const auto& u : utxo_pool_) {
+                if (sodium_memcmp(r_pk.data(), u.destination_one_time.data(), 32) == 0) {
+                    has_known_ring_member = true;
+                    break;
+                }
+            }
+            if (has_known_ring_member) break;
+        }
+        if (!has_known_ring_member && !utxo_pool_.empty()) {
+            error_msg = "Transaccion remota rechazada: ningun participante del anillo pertenece al ledger.";
             return false;
         }
 

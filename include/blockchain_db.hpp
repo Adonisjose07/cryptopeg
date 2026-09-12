@@ -36,6 +36,8 @@ public:
     bool load_vault_state(Vault& vault) const;
     bool save_vault_state(const Vault& vault);
 
+    bool is_deposit_tx_processed(const std::string& tx_hash) const;
+
     void commit_block(
         const Block& block,
         const Vault& vault,
@@ -53,6 +55,7 @@ private:
     MDB_dbi dbi_key_images_{0};
     MDB_dbi dbi_utxos_{0};
     MDB_dbi dbi_metadata_{0};
+    MDB_dbi dbi_deposit_txs_{0};
 
     std::string db_path_;
     uint64_t top_height_{0};

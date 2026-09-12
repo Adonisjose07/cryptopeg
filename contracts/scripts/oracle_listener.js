@@ -1,5 +1,6 @@
 const { ethers } = require("ethers");
 const path = require("path");
+const fs = require("fs");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env") });
 
 const ENABLE_ORACLE = (process.env.ENABLE_ORACLE || "false").toLowerCase() === "true";
@@ -7,6 +8,7 @@ const ARBITRUM_RPC_URL = process.env.ARBITRUM_SEPOLIA_RPC_URL || process.env.ARB
 const VAULT_ADDRESS = process.env.USDT_VAULT_ADDRESS || "0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0";
 const NODE_DAEMON_URL = process.env.NODE_DAEMON_URL || "http://127.0.0.1:8080";
 const POLL_INTERVAL_MS = parseInt(process.env.ORACLE_POLL_INTERVAL_MS || "5000");
+const STATE_FILE = process.env.RELAYER_STATE_FILE || path.resolve(__dirname, "../../data/relayer_state.json");
 
 // ABI bidireccional para CryptoPegVault en Arbitrum L2
 const VAULT_ABI = [
@@ -91,15 +93,67 @@ async function main() {
     console.warn(`[ORACLE-RELAYER] No se pudo consultar validatorSigner on-chain:`, err.message);
   }
 
-  // Estados de sondeo
-  const processedTxHashes = new Set();
-  const processedWithdrawalOrders = new Set();
-  let lastCheckedL2Block;
-  let lastCheckedChainHeight = 0;
+  // Carga y guardado de estado en disco para resiliencia ante reinicios
+  function loadState() {
+    try {
+      if (fs.existsSync(STATE_FILE)) {
+        const raw = fs.readFileSync(STATE_FILE, "utf8");
+        const data = JSON.parse(raw);
+        return {
+          lastCheckedL2Block: Number(data.lastCheckedL2Block || 0),
+          lastCheckedChainHeight: Number(data.lastCheckedChainHeight || 0),
+          processedTxHashes: new Set(data.processedTxHashes || []),
+          processedWithdrawalOrders: new Set(data.processedWithdrawalOrders || [])
+        };
+      }
+    } catch (e) {
+      console.warn(`[ORACLE] No se pudo cargar archivo de estado (${e.message}). Iniciando estado limpio.`);
+    }
+    return {
+      lastCheckedL2Block: 0,
+      lastCheckedChainHeight: 0,
+      processedTxHashes: new Set(),
+      processedWithdrawalOrders: new Set()
+    };
+  }
+
+  function saveState(state) {
+    try {
+      const dir = path.dirname(STATE_FILE);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const data = {
+        lastCheckedL2Block: state.lastCheckedL2Block,
+        lastCheckedChainHeight: state.lastCheckedChainHeight,
+        processedTxHashes: Array.from(state.processedTxHashes).slice(-5000),
+        processedWithdrawalOrders: Array.from(state.processedWithdrawalOrders).slice(-5000),
+        updatedAt: new Date().toISOString()
+      };
+      fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2), "utf8");
+    } catch (e) {
+      console.error(`[ORACLE] Error guardando estado en ${STATE_FILE}:`, e.message);
+    }
+  }
+
+  // Estados de sondeo inicializados desde persistencia
+  const savedState = loadState();
+  const processedTxHashes = savedState.processedTxHashes;
+  const processedWithdrawalOrders = savedState.processedWithdrawalOrders;
+  let lastCheckedL2Block = savedState.lastCheckedL2Block;
+  let lastCheckedChainHeight = savedState.lastCheckedChainHeight;
+
+  let isProcessingDeposits = false;
+  let isProcessingWithdrawals = false;
 
   try {
-    lastCheckedL2Block = await provider.getBlockNumber();
-    console.log(`[ORACLE] Conectado exitosamente. Monitoreando depósitos desde bloque L2 #${lastCheckedL2Block}...\n`);
+    const currentL2 = await provider.getBlockNumber();
+    if (lastCheckedL2Block === 0 || lastCheckedL2Block > currentL2) {
+      lastCheckedL2Block = currentL2;
+    }
+    console.log(`[ORACLE] Conectado exitosamente.`);
+    console.log(` -> Monitoreando depósitos desde bloque L2 #${lastCheckedL2Block}`);
+    console.log(` -> Monitoreando retiros desde bloque de cadena #${lastCheckedChainHeight}\n`);
   } catch (err) {
     console.error("[ORACLE] Error conectando al RPC de Arbitrum:", err.message);
     process.exit(1);
@@ -107,6 +161,9 @@ async function main() {
 
   // 1. Tarea: Sondeo de Depósitos L2 -> C++ Daemon
   async function pollInboundDeposits() {
+    if (isProcessingDeposits) return;
+    isProcessingDeposits = true;
+
     try {
       const currentBlock = await provider.getBlockNumber();
       if (currentBlock <= lastCheckedL2Block) return;
@@ -135,7 +192,10 @@ async function main() {
         try {
           const res = await fetch(`${NODE_DAEMON_URL}/api/v1/vault/deposit`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "X-Oracle-Secret": process.env.ORACLE_SECRET || "cryptopeg_oracle_secret_2026"
+            },
             body: JSON.stringify({
               gross_usdt: grossUSDT,
               stealth_pub_view: viewKeyHex,
@@ -157,8 +217,11 @@ async function main() {
       }
 
       lastCheckedL2Block = toBlock;
+      saveState({ lastCheckedL2Block, lastCheckedChainHeight, processedTxHashes, processedWithdrawalOrders });
     } catch (pollErr) {
       console.warn(`[ORACLE-INBOUND] Aviso en sondeo de eventos (${pollErr.message}), reintentando...`);
+    } finally {
+      isProcessingDeposits = false;
     }
   }
 
@@ -173,6 +236,8 @@ async function main() {
   // 2. Tarea: Sondeo y Relayer de Retiros C++ Daemon -> Arbitrum L2
   async function pollOutboundWithdrawals() {
     if (!vaultWithSigner || !validatorWallet) return;
+    if (isProcessingWithdrawals) return;
+    isProcessingWithdrawals = true;
 
     try {
       const statusRes = await fetch(`${NODE_DAEMON_URL}/api/v1/node/status`);
@@ -185,91 +250,104 @@ async function main() {
       if (startHeight > currentHeight) return;
 
       for (let h = startHeight; h <= currentHeight; h++) {
+        let blockSucceeded = true;
         try {
           const blockRes = await fetch(`${NODE_DAEMON_URL}/api/v1/chain/block/${h}`);
-          if (!blockRes.ok) continue;
+          if (!blockRes.ok) {
+            blockSucceeded = false;
+            break;
+          }
           const block = await blockRes.json();
 
-          if (!block.withdrawals || block.withdrawals.length === 0) {
-            continue;
-          }
+          if (block.withdrawals && block.withdrawals.length > 0) {
+            for (const w of block.withdrawals) {
+              const orderIdStr = w.order_id;
+              if (!orderIdStr || processedWithdrawalOrders.has(orderIdStr)) {
+                continue;
+              }
 
-          for (const w of block.withdrawals) {
-            const orderIdStr = w.order_id;
-            if (!orderIdStr || processedWithdrawalOrders.has(orderIdStr)) {
-              continue;
-            }
+              const orderIdHash = ethers.keccak256(ethers.toUtf8Bytes(orderIdStr));
 
-            const orderIdHash = ethers.keccak256(ethers.toUtf8Bytes(orderIdStr));
-
-            // Verificar si ya fue ejecutada en el Smart Contract on-chain
-            const isExecuted = await vaultReadOnly.executedWithdrawals(orderIdHash);
-            if (isExecuted) {
-              processedWithdrawalOrders.add(orderIdStr);
-              continue;
-            }
-
-            const recipient = w.destination;
-            if (!recipient || !ethers.isAddress(recipient)) {
-              console.warn(`[ORACLE-RELAYER] Bloque #${h} - Orden ${orderIdStr} tiene dirección de destino no válida en Arbitrum: "${recipient}". Omitiendo.`);
-              processedWithdrawalOrders.add(orderIdStr);
-              continue;
-            }
-
-            const amount = BigInt(w.net_amount_raw || Math.round(parseFloat(w.net_tumbled) * 1e6));
-            if (amount <= 0n) {
-              console.warn(`[ORACLE-RELAYER] Bloque #${h} - Orden ${orderIdStr} tiene monto neto 0.`);
-              processedWithdrawalOrders.add(orderIdStr);
-              continue;
-            }
-
-            console.log(`\n=================================================================`);
-            console.log(`[ORACLE-RELAYER] -> NUEVA SOLICITUD DE RETIRO DETECTADA EN CADENA`);
-            console.log(`=================================================================`);
-            console.log(` -> Bloque Privado:     #${h}`);
-            console.log(` -> Orden ID:           ${orderIdStr}`);
-            console.log(` -> Destino Arbitrum:   ${recipient}`);
-            console.log(` -> Monto Neto a Enviar:${ethers.formatUnits(amount, 6)} USDT`);
-
-            const network = await provider.getNetwork();
-            const chainId = network.chainId;
-
-            // keccak256(abi.encodePacked(orderId, recipient, amount, block.chainid, address(this)))
-            const messageHash = ethers.solidityPackedKeccak256(
-              ["bytes32", "address", "uint256", "uint256", "address"],
-              [orderIdHash, recipient, amount, chainId, VAULT_ADDRESS]
-            );
-
-            const signature = await validatorWallet.signMessage(ethers.getBytes(messageHash));
-            console.log(`[ORACLE-RELAYER] Firma ECDSA generada por Validador ${validatorWallet.address}.`);
-            console.log(`[ORACLE-RELAYER] Transmitiendo CryptoPegVault.withdraw(...) a Arbitrum Sepolia...`);
-
-            try {
-              const tx = await vaultWithSigner.withdraw(orderIdHash, recipient, amount, signature);
-              console.log(`[ORACLE-RELAYER] Tx enviada a Arbitrum Sepolia! Hash: ${tx.hash}`);
-              console.log(`[ORACLE-RELAYER] Esperando confirmación del bloque L2...`);
-
-              const receipt = await tx.wait();
-              console.log(`[ORACLE-RELAYER] [EXITO TOTAL] Retiro confirmado en bloque #${receipt.blockNumber}! Gas: ${receipt.gasUsed}`);
-              console.log(`[ORACLE-RELAYER] Enlace Arbiscan: https://sepolia.arbiscan.io/tx/${tx.hash}\n`);
-              processedWithdrawalOrders.add(orderIdStr);
-            } catch (txErr) {
-              if (txErr.message && txErr.message.includes("Withdrawal order already executed")) {
-                console.log(`[ORACLE-RELAYER] Orden ${orderIdStr} ya fue ejecutada on-chain.`);
+              // Verificar si ya fue ejecutada en el Smart Contract on-chain
+              const isExecuted = await vaultReadOnly.executedWithdrawals(orderIdHash);
+              if (isExecuted) {
                 processedWithdrawalOrders.add(orderIdStr);
-              } else {
-                console.error(`[ORACLE-RELAYER] [ERROR] Fallo al ejecutar withdraw en Arbitrum:`, txErr.message);
+                continue;
+              }
+
+              const recipient = w.destination;
+              if (!recipient || !ethers.isAddress(recipient)) {
+                console.warn(`[ORACLE-RELAYER] Bloque #${h} - Orden ${orderIdStr} tiene dirección de destino no válida en Arbitrum: "${recipient}". Omitiendo.`);
+                processedWithdrawalOrders.add(orderIdStr);
+                continue;
+              }
+
+              const amount = BigInt(w.net_amount_raw || Math.round(parseFloat(w.net_tumbled) * 1e6));
+              if (amount <= 0n) {
+                console.warn(`[ORACLE-RELAYER] Bloque #${h} - Orden ${orderIdStr} tiene monto neto 0.`);
+                processedWithdrawalOrders.add(orderIdStr);
+                continue;
+              }
+
+              console.log(`\n=================================================================`);
+              console.log(`[ORACLE-RELAYER] -> NUEVA SOLICITUD DE RETIRO DETECTADA EN CADENA`);
+              console.log(`=================================================================`);
+              console.log(` -> Bloque Privado:     #${h}`);
+              console.log(` -> Orden ID:           ${orderIdStr}`);
+              console.log(` -> Destino Arbitrum:   ${recipient}`);
+              console.log(` -> Monto Neto a Enviar:${ethers.formatUnits(amount, 6)} USDT`);
+
+              const network = await provider.getNetwork();
+              const chainId = network.chainId;
+
+              // keccak256(abi.encodePacked(orderId, recipient, amount, block.chainid, address(this)))
+              const messageHash = ethers.solidityPackedKeccak256(
+                ["bytes32", "address", "uint256", "uint256", "address"],
+                [orderIdHash, recipient, amount, chainId, VAULT_ADDRESS]
+              );
+
+              const signature = await validatorWallet.signMessage(ethers.getBytes(messageHash));
+              console.log(`[ORACLE-RELAYER] Firma ECDSA generada por Validador ${validatorWallet.address}.`);
+              console.log(`[ORACLE-RELAYER] Transmitiendo CryptoPegVault.withdraw(...) a Arbitrum Sepolia...`);
+
+              try {
+                const tx = await vaultWithSigner.withdraw(orderIdHash, recipient, amount, signature);
+                console.log(`[ORACLE-RELAYER] Tx enviada a Arbitrum Sepolia! Hash: ${tx.hash}`);
+                console.log(`[ORACLE-RELAYER] Esperando confirmación del bloque L2...`);
+
+                const receipt = await tx.wait();
+                console.log(`[ORACLE-RELAYER] [EXITO TOTAL] Retiro confirmado en bloque #${receipt.blockNumber}! Gas: ${receipt.gasUsed}`);
+                console.log(`[ORACLE-RELAYER] Enlace Arbiscan: https://sepolia.arbiscan.io/tx/${tx.hash}\n`);
+                processedWithdrawalOrders.add(orderIdStr);
+              } catch (txErr) {
+                if (txErr.message && txErr.message.includes("Withdrawal order already executed")) {
+                  console.log(`[ORACLE-RELAYER] Orden ${orderIdStr} ya fue ejecutada on-chain.`);
+                  processedWithdrawalOrders.add(orderIdStr);
+                } else {
+                  console.error(`[ORACLE-RELAYER] [ERROR] Fallo al ejecutar withdraw en Arbitrum:`, txErr.message);
+                  blockSucceeded = false;
+                  break;
+                }
               }
             }
           }
         } catch (blockErr) {
           console.warn(`[ORACLE-RELAYER] Error procesando bloque #${h}:`, blockErr.message);
+          blockSucceeded = false;
         }
-      }
 
-      lastCheckedChainHeight = currentHeight;
+        if (!blockSucceeded) {
+          console.warn(`[ORACLE-RELAYER] Deteniendo avance en bloque #${h} debido a un fallo. Se reintentará en el siguiente ciclo.`);
+          break;
+        }
+
+        lastCheckedChainHeight = h;
+        saveState({ lastCheckedL2Block, lastCheckedChainHeight, processedTxHashes, processedWithdrawalOrders });
+      }
     } catch (err) {
       console.warn(`[ORACLE-RELAYER] Aviso en sondeo de retiros (${err.message}).`);
+    } finally {
+      isProcessingWithdrawals = false;
     }
   }
 

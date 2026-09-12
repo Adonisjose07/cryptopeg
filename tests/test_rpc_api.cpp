@@ -67,14 +67,23 @@ int main() {
     std::cout << "[PASO 5] Probando POST /api/v1/vault/deposit (1,000 USDT para Alice)...\n";
     json dep_req = {
         {"gross_usdt", 1000.0},
-        {"recipient_stealth_address", alice_j["stealth_address"]}
+        {"recipient_stealth_address", alice_j["stealth_address"]},
+        {"tx_hash", "0xArbitrumSepoliaDepositTxAlice01"}
     };
-    res = cli.Post("/api/v1/vault/deposit", dep_req.dump(), "application/json");
+    httplib::Headers oracle_headers = {
+        {"X-Oracle-Secret", "cryptopeg_oracle_secret_2026"}
+    };
+    res = cli.Post("/api/v1/vault/deposit", oracle_headers, dep_req.dump(), "application/json");
     assert(res && res->status == 200);
     auto dep_res = json::parse(res->body);
     assert(dep_res["success"] == true);
     assert(dep_res["block_height"] == 1);
     std::cout << "  [OK] Depósito procesado. Minado en Bloque #1. Tokens acuñados: " << dep_res["net_shielded_minted"] << "\n";
+
+    // Probar Idempotencia: segundo intento con el mismo tx_hash debe retornar 409
+    auto res_replay = cli.Post("/api/v1/vault/deposit", oracle_headers, dep_req.dump(), "application/json");
+    assert(res_replay && res_replay->status == 409);
+    std::cout << "  [OK] Idempotencia verificada: intento de replay rechazado con código 409.\n";
 
     // 5. Test Wallet Scan for Alice (View-Key Scanning)
     std::cout << "[PASO 6] Probando POST /api/v1/wallet/scan (Escaneo con View-Key de Alice)...\n";

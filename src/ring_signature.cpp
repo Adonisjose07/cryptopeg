@@ -40,7 +40,46 @@ static Key256 ring_hash_challenge(
 
     Key256 scalar_out;
     crypto_core_ed25519_scalar_reduce(scalar_out.data(), hash_out);
+
+    sodium_memzero(buffer, sizeof(buffer));
+    sodium_memzero(hash_out, sizeof(hash_out));
     return scalar_out;
+}
+
+Hash256 RingSignatureEngine::compute_canonical_tx_hash(
+    const std::vector<OneTimeOutput>& outputs,
+    Amount public_fee,
+    const std::vector<Key256>& ring_pubkeys,
+    const KeyImage& key_image
+) {
+    crypto_generichash_state state;
+    crypto_generichash_init(&state, nullptr, 0, 32);
+
+    // 1. Salidas (destinos, claves efímeras y montos)
+    uint32_t out_count = static_cast<uint32_t>(outputs.size());
+    crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>(&out_count), sizeof(out_count));
+    for (const auto& out : outputs) {
+        crypto_generichash_update(&state, out.destination_one_time.data(), 32);
+        crypto_generichash_update(&state, out.ephemeral_public_key.data(), 32);
+        crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>(&out.amount), sizeof(out.amount));
+    }
+
+    // 2. Comisión pública
+    crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>(&public_fee), sizeof(public_fee));
+
+    // 3. Claves públicas del anillo
+    uint32_t ring_count = static_cast<uint32_t>(ring_pubkeys.size());
+    crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>(&ring_count), sizeof(ring_count));
+    for (const auto& pk : ring_pubkeys) {
+        crypto_generichash_update(&state, pk.data(), 32);
+    }
+
+    // 4. Imagen de clave
+    crypto_generichash_update(&state, key_image.data(), 32);
+
+    Hash256 canonical_hash;
+    crypto_generichash_final(&state, canonical_hash.data(), 32);
+    return canonical_hash;
 }
 
 RingSignature RingSignatureEngine::sign(
@@ -177,8 +216,8 @@ bool RingSignatureEngine::verify(
         current_c = ring_hash_challenge(message_hash, L_i, R_i);
     }
 
-    // El anillo es válido si regresa exactamente a c0
-    return std::memcmp(current_c.data(), signature.c0.data(), 32) == 0;
+    // El anillo es válido si regresa exactamente a c0 (tiempo constante AUD-MED-01)
+    return sodium_memcmp(current_c.data(), signature.c0.data(), 32) == 0;
 }
 
 bool KeyImageLedger::register_key_image(const KeyImage& image) {

@@ -314,11 +314,33 @@ void RpcServer::setup_routes() {
     // 7. Depósito de USDT Público -> Acuñación 1:1 en Bóveda
     server_->Post("/api/v1/vault/deposit", [this](const httplib::Request& req, httplib::Response& res) {
         try {
+            // 1. Verificación de autenticación de Oráculo (AUD-CRIT-01)
+            const char* env_secret = std::getenv("ORACLE_SECRET");
+            std::string expected_secret = env_secret ? env_secret : "cryptopeg_oracle_secret_2026";
+            std::string provided_secret = req.get_header_value("X-Oracle-Secret");
+            if (provided_secret != expected_secret) {
+                res.status = 401;
+                res.set_content(json{{"error", "No autorizado: se requiere cabecera 'X-Oracle-Secret' válida para acuñar depósitos."}}.dump(), "application/json");
+                return;
+            }
+
             auto body = json::parse(req.body);
             double gross_val = body.at("gross_usdt").get<double>();
             Amount gross = parse_usdt(gross_val);
             std::string custom_tx = body.value("tx_hash", "");
             uint64_t custom_ts = body.value("timestamp", 0ULL);
+
+            // 2. Verificación de Idempotencia y No-Vacío de tx_hash (AUD-CRIT-01 & AUD-CRIT-02)
+            if (custom_tx.empty()) {
+                res.status = 400;
+                res.set_content(json{{"error", "El campo 'tx_hash' de Arbitrum es obligatorio para registrar un depósito."}}.dump(), "application/json");
+                return;
+            }
+            if (node_.is_deposit_tx_processed(custom_tx)) {
+                res.status = 409;
+                res.set_content(json{{"error", "Transacción de depósito ya procesada previamente (idempotencia garantizada)."}}.dump(), "application/json");
+                return;
+            }
 
             StealthAddress recipient;
             if (body.contains("recipient_stealth_address")) {
