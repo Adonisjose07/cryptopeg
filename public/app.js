@@ -543,6 +543,29 @@ async function generateAndUseNewStealthAddress() {
   useCurrentWalletAsRecipient();
 }
 
+// Helper: Calculate dynamic gas overrides with safety buffer for Arbitrum Sepolia
+async function getArbitrumTxOverrides(provider) {
+  try {
+    const feeData = await provider.getFeeData();
+    const block = await provider.getBlock("latest");
+    const currentBaseFee = block && block.baseFeePerGas ? block.baseFeePerGas : (feeData.gasPrice || 350000000n);
+    
+    // Buffer del 100% sobre el baseFee (2x) para absorber fluctuaciones rápidas de bloques en Arbitrum
+    const maxFee = (currentBaseFee * 200n) / 100n;
+    const priorityFee = feeData.maxPriorityFeePerGas && feeData.maxPriorityFeePerGas > 0n 
+      ? (feeData.maxPriorityFeePerGas * 150n) / 100n 
+      : 20000000n; // 0.02 Gwei
+
+    return {
+      maxFeePerGas: maxFee + priorityFee,
+      maxPriorityFeePerGas: priorityFee
+    };
+  } catch (err) {
+    console.warn("No se pudieron calcular overrides dinámicos de gas:", err);
+    return {};
+  }
+}
+
 // Execute MetaMask Deposit to CryptoPegVault
 async function executeMetaMaskDeposit() {
   if (!web3Signer) {
@@ -586,7 +609,11 @@ async function executeMetaMaskDeposit() {
 
     if (currentAllowance < depositAmountUnits) {
       showToast("Confirma la aprobación de USDT en MetaMask...", "success");
-      const approveTx = await usdtContract.approve(VAULT_CONTRACT_ADDRESS, depositAmountUnits);
+      const approveOverrides = await getArbitrumTxOverrides(web3Provider);
+      const approveTx = await usdtContract.approve(VAULT_CONTRACT_ADDRESS, depositAmountUnits, {
+        ...approveOverrides,
+        gasLimit: 120000n
+      });
       btn.innerHTML = `<span class="animate-spin inline-block mr-2">⏳</span> Esperando confirmación de aprobación en Arbitrum...`;
       await approveTx.wait();
       showToast("¡USDT Aprobado con éxito! Ahora confirma el depósito...", "success");
@@ -595,7 +622,20 @@ async function executeMetaMaskDeposit() {
     // Step 2: Execute deposit
     btn.innerHTML = `<span class="animate-spin inline-block mr-2">🚀</span> 2/2: Confirmando depósito en CryptoPegVault...`;
     const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, VAULT_ABI, web3Signer);
-    const depositTx = await vaultContract.deposit(depositAmountUnits, stealthView, stealthSpend);
+    
+    const depOverrides = await getArbitrumTxOverrides(web3Provider);
+    let gasLimit = 350000n;
+    try {
+      const est = await vaultContract.deposit.estimateGas(depositAmountUnits, stealthView, stealthSpend);
+      gasLimit = (est * 135n) / 100n;
+    } catch (e) {
+      console.warn("Usando gasLimit seguro por defecto:", e);
+    }
+
+    const depositTx = await vaultContract.deposit(depositAmountUnits, stealthView, stealthSpend, {
+      ...depOverrides,
+      gasLimit
+    });
 
     btn.innerHTML = `<span class="animate-spin inline-block mr-2">⛓️</span> Minando bloque en Arbitrum Sepolia...`;
     showToast(`Tx enviada: ${depositTx.hash.slice(0, 14)}...`, "success");
@@ -624,7 +664,13 @@ async function executeMetaMaskDeposit() {
     console.error("Error en depósito MetaMask:", err);
     btn.disabled = false;
     btn.innerHTML = origHtml;
-    showToast(err.reason || err.message || "Transacción cancelada o fallida", "error");
+    let friendlyMsg = err.reason || err.message || "Transacción cancelada o fallida";
+    if (friendlyMsg.includes("user rejected") || friendlyMsg.includes("ACTION_REJECTED")) {
+      friendlyMsg = "Transacción cancelada por el usuario en MetaMask.";
+    } else if (friendlyMsg.includes("max fee per gas less than block base fee")) {
+      friendlyMsg = "La tarifa base de Arbitrum osciló rápidamente. Hemos ajustado el buffer automático, por favor reintenta el depósito.";
+    }
+    showToast(friendlyMsg, "error");
   }
 }
 
