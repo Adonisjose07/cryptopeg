@@ -298,6 +298,30 @@
           <p class="text-xs text-[#919EAB] mt-3 leading-relaxed">El colateral USDT se deposita en el Smart Contract y el oráculo emite tokens privados 1:1 protegidos criptográficamente con DKSAP.</p>
         </div>
 
+        <!-- Faucet de Pruebas Siempre Visible -->
+        <div class="bg-[#00A76F]/10 border border-[#00A76F]/30 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-card">
+          <div class="flex items-center space-x-3">
+            <span class="p-2 bg-[#00A76F]/20 text-[#00A76F] rounded-xl shrink-0">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+              </svg>
+            </span>
+            <div>
+              <div class="flex items-center space-x-2">
+                <span class="text-xs font-bold text-[#F9FAFB]">🚰 Faucet de Pruebas Arbitrum L2</span>
+                <span class="text-[10px] bg-[#00A76F]/20 text-[#00A76F] px-2 py-0.5 rounded font-semibold">Gratis</span>
+              </div>
+              <p class="text-[11px] text-[#919EAB] mt-0.5">¿No tienes fondos para probar? Solicita 10,000 MockUSDT de prueba directamente a tu MetaMask.</p>
+            </div>
+          </div>
+          <button type="button" onclick="faucetMintUSDT()" id="btn-faucet-mint" class="w-full sm:w-auto bg-[#00A76F] hover:bg-[#00784E] text-white font-bold text-xs px-4 py-2.5 rounded-xl transition shadow-md cursor-pointer flex items-center justify-center space-x-1.5 shrink-0">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+            </svg>
+            <span>Obtener 10,000 USDT</span>
+          </button>
+        </div>
+
         <!-- Web3 Connected Status Box -->
         <div id="web3-wallet-info" class="hidden bg-[#161C24] border border-[rgba(145,158,171,0.16)] rounded-xl p-4 text-xs space-y-2.5 shadow-inner">
           <div class="flex items-center justify-between">
