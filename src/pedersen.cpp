@@ -6,7 +6,7 @@ namespace crypto {
 
 static Key256 init_generator_H() {
     Key256 H;
-    const char* seed = "CryptoPegUSDT_Monero_Pedersen_Generator_H_Point";
+    const char* seed = "CryptoPegUSDT_RingCT_Pedersen_Generator_H_Point";
     uint8_t hash[crypto_core_ed25519_UNIFORMBYTES];
     crypto_generichash(hash, sizeof(hash), reinterpret_cast<const uint8_t*>(seed), std::strlen(seed), nullptr, 0);
 

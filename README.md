@@ -1,4 +1,4 @@
-# CryptoPeg USDT — Monero-Grade Private Stablecoin & Arbitrum L2 Custody
+# CryptoPeg USDT — Confidential Stablecoin & Arbitrum L2 Custody
 
 <div align="center">
 
@@ -10,7 +10,7 @@
 ![P2P Network](https://img.shields.io/badge/Network-P2P%20Gossip%20Mesh-purple.svg?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-brightgreen.svg?style=for-the-badge)
 
-**Moneda estable confidencial vinculada 1:1 con USDT, privacidad criptográfica de grado Monero y custodia colateral en Arbitrum Layer 2.**
+**Moneda estable confidencial vinculada 1:1 con USDT, privacidad criptográfica avanzada (RingCT MLSAG) y custodia colateral en Arbitrum Layer 2.**
 
 [Características](#características-principales) • [Arquitectura](#arquitectura-del-sistema) • [Roles de Nodo](#roles-del-nodo-validador-vs-oráculo) • [Inicio Rápido](#inicio-rápido-con-docker) • [Smart Contracts](#smart-contracts-en-arbitrum-sepolia) • [Billetera CLI](#billetera-cli-independiente) • [API REST](#api-rest--json-rpc)
 

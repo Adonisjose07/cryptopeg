@@ -13,7 +13,7 @@ void cleanup_test_dir(const std::string& path) {
 
 int main() {
     std::cout << "=================================================================\n";
-    std::cout << "  TEST: LMDB DISK PERSISTENCE & BLOCKCHAIN RESTORATION (MONERO)  \n";
+    std::cout << "  TEST: LMDB DISK PERSISTENCE & BLOCKCHAIN RESTORATION (RINGCT)  \n";
     std::cout << "=================================================================\n\n";
 
     const std::string test_db_path = "./test_data_lmdb";

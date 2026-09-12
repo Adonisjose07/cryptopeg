@@ -186,7 +186,7 @@ Hash256 Block::compute_merkle_root() const {
             if (i + 1 < current.size()) {
                 std::memcpy(buf + 32, current[i + 1].data(), 32);
             } else {
-                // Si es impar, duplicar como en Bitcoin/Monero
+                // Si es impar, duplicar el último hash para el árbol de Merkle
                 std::memcpy(buf + 32, current[i].data(), 32);
             }
             crypto_generichash(combined.data(), 32, buf, 64, nullptr, 0);

@@ -13,7 +13,7 @@
 } while(0)
 
 int main() {
-    std::cout << "[TEST] Iniciando prueba criptografica de privacidad estilo Monero...\n";
+    std::cout << "[TEST] Iniciando prueba criptografica de privacidad avanzada RingCT MLSAG...\n";
     if (sodium_init() < 0) {
         std::cerr << "Error al inicializar sodium\n";
         return 1;
@@ -107,6 +107,6 @@ int main() {
     CHECK(balance_ok, "Compromiso de Pedersen debe conservar balance");
     std::cout << "  -> Compromiso de Pedersen verificado: Sum(Inputs) == Sum(Outputs) en forma oculta.\n";
 
-    std::cout << "[TEST PASSED] Todos los tests de privacidad estilo Monero superados con exito.\n";
+    std::cout << "[TEST PASSED] Todos los tests de privacidad RingCT superados con exito.\n";
     return 0;
 }

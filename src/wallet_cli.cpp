@@ -32,7 +32,7 @@ void print_banner() {
     std::cout << color::CYAN << color::BOLD;
     std::cout << "  =================================================================\n";
     std::cout << "   CRYPTPEG USDT -- BILLETERA CLI INDEPENDIENTE (RINGCT / DKSAP)   \n";
-    std::cout << "   Privacidad Grado Monero | Mnemónico BIP-39 24 Palabras | 1:1    \n";
+    std::cout << "   Privacidad Criptográfica RingCT | Mnemónico BIP-39 24 Palabras | 1:1    \n";
     std::cout << "  =================================================================\n";
     std::cout << color::RESET << "\n";
 }

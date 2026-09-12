@@ -21,7 +21,7 @@ public:
     // Calcular imagen de clave: I = x * H_p(P)
     static KeyImage compute_key_image(const Key256& privkey, const Key256& pubkey);
 
-    // Firmar con anillo de señuelos (Monero LSAG)
+    // Firmar con anillo de señuelos (RingCT MLSAG)
     // message: hash de la transacción
     // ring: lista de N claves públicas (incluyendo señuelos y la real)
     // real_index: posición de la clave real en el anillo (0 <= real_index < N)
