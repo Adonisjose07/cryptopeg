@@ -1,0 +1,21 @@
+{
+  "network": "arbitrumSepolia",
+  "chainId": 421614,
+  "deployer": "0x9d59867EfE155406f637F028997866f252dcc72c",
+  "contracts": {
+    "MockUSDT": {
+      "address": "0x900A96C51aac4EB8aF5FDa39bc0Ef13ADBe88B44",
+      "decimals": 6,
+      "explorer": "https://sepolia.arbiscan.io/address/0x900A96C51aac4EB8aF5FDa39bc0Ef13ADBe88B44"
+    },
+    "CryptoPegVault": {
+      "address": "0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0",
+      "depositFeeBps": 50,
+      "withdrawFeeBps": 50,
+      "validatorSigner": "0x9d59867EfE155406f637F028997866f252dcc72c",
+      "owner": "0x9d59867EfE155406f637F028997866f252dcc72c",
+      "explorer": "https://sepolia.arbiscan.io/address/0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0"
+    }
+  },
+  "deployedAt": "2026-09-12T15:17:09Z"
+}
