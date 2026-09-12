@@ -276,6 +276,7 @@ TumblingPlan Node::withdraw_shielded(
 
     // 3. Procesar quema y comisión en la bóveda
     WithdrawalReceipt receipt = vault_.request_withdrawal(tokens_to_withdraw);
+    receipt.destination_address = destination_public_usdt;
 
     // 4. Si hubo cambio, re-emitir output privado para el usuario
     std::vector<OneTimeOutput> new_outs;

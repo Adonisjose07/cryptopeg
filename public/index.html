@@ -433,8 +433,20 @@
           </div>
 
           <div>
-            <label class="block text-xs font-semibold text-[#919EAB] uppercase tracking-wider mb-1.5">Billetera Externa de Destino (Cold Storage USDT)</label>
-            <input type="text" id="withdraw-dest" placeholder="0xDestinationExternalWallet..." value="0xColdStorageUSDT_VaultAddress777" class="w-full bg-[#161C24] border border-[rgba(145,158,171,0.16)] focus:border-[#8E33FF] focus:ring-1 focus:ring-[#8E33FF] rounded-xl px-4 py-3 text-xs text-[#F9FAFB] mono focus:outline-none transition">
+            <div class="flex items-center justify-between mb-1.5">
+              <label class="text-xs font-semibold text-[#919EAB] uppercase tracking-wider">Dirección Destino en Arbitrum Sepolia (L2)</label>
+              <button type="button" onclick="useMetaMaskAddressForWithdraw()" class="text-[11px] text-[#8E33FF] hover:text-[#B985FF] font-medium transition cursor-pointer flex items-center space-x-1">
+                <svg class="w-3.5 h-3.5 inline" viewBox="0 0 32 32" fill="currentColor">
+                  <path d="M29.58 13.59l-2.07-7.81c-.24-.92-1.07-1.58-2.02-1.58H6.51c-.95 0-1.78.65-2.02 1.58L2.42 13.59c-.27 1.02.26 2.08 1.25 2.5l11.47 4.88c.55.23 1.17.23 1.72 0l11.47-4.88c.99-.42 1.52-1.48 1.25-2.5zM16 27.81l-8.5-4.25 1.74-2.61L16 23.4l6.76-2.45 1.74 2.61-8.5 4.25z"/>
+                </svg>
+                <span>Usar mi dirección MetaMask</span>
+              </button>
+            </div>
+            <input type="text" id="withdraw-dest" placeholder="0x9d59867EfE155406f637F028997866f252dcc72c" value="" class="w-full bg-[#161C24] border border-[rgba(145,158,171,0.16)] focus:border-[#8E33FF] focus:ring-1 focus:ring-[#8E33FF] rounded-xl px-4 py-3 text-xs text-[#F9FAFB] mono focus:outline-none transition">
+            <p class="text-[11px] text-[#919EAB] mt-1.5 flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-[#00A76F]"></span>
+              <span>El puente Oráculo Relayer despachará el USDT automáticamente a tu cuenta L2 al minarse el bloque.</span>
+            </p>
           </div>
 
           <!-- Action Button: Retiro con Mezclador (Secondary #8E33FF) -->
@@ -732,6 +744,17 @@
               <span class="text-[11px] text-[#919EAB] uppercase tracking-wider font-semibold">Neto Dispersado:</span>
               <div class="text-sm font-bold text-[#00A76F] mono mt-0.5" id="tumb-net">-</div>
             </div>
+          </div>
+
+          <!-- Banner de Estado Relayer L2 -->
+          <div class="bg-[#00A76F]/10 border border-[#00A76F]/25 rounded-xl p-3.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div class="flex items-center space-x-2.5">
+              <span class="w-2 h-2 rounded-full bg-[#00A76F] shrink-0"></span>
+              <span class="text-[#F9FAFB]">Billetera Destino L2: <strong class="mono text-[#00B8D9] break-all select-all" id="tumb-dest">-</strong></span>
+            </div>
+            <span class="text-[10px] bg-[#00A76F]/15 text-[#00A76F] border border-[#00A76F]/30 px-2.5 py-0.5 rounded-full font-semibold shrink-0">
+              Despacho Automatizado por Oráculo Relayer
+            </span>
           </div>
 
           <div class="space-y-3">

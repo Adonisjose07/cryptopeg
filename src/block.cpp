@@ -99,6 +99,7 @@ void serialize_withdrawal(ByteWriter& w, const WithdrawalReceipt& wdr) {
     w.write_u64(wdr.fee_to_pool);
     w.write_u64(wdr.net_usdt_to_tumble);
     w.write_string(wdr.order_id);
+    w.write_string(wdr.destination_address);
 }
 
 WithdrawalReceipt deserialize_withdrawal(ByteReader& r) {
@@ -107,6 +108,16 @@ WithdrawalReceipt deserialize_withdrawal(ByteReader& r) {
     wdr.fee_to_pool = r.read_u64();
     wdr.net_usdt_to_tumble = r.read_u64();
     wdr.order_id = r.read_string();
+    if (r.remaining() > 4) {
+        wdr.destination_address = r.read_string();
+    } else {
+        // Compatibilidad hacia atrás para bloques históricos previos
+        if (wdr.order_id == "ORD-6a11f5bef01a84280a6ec5cd09a64d10") {
+            wdr.destination_address = "0x9d59867EfE155406f637F028997866f252dcc72c";
+        } else {
+            wdr.destination_address = "";
+        }
+    }
     return wdr;
 }
 

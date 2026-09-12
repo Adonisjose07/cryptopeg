@@ -678,6 +678,10 @@ function renderTumblerRoutes(plan) {
   document.getElementById("tumb-fee").textContent = "- " + plan.fee_to_pool;
   document.getElementById("tumb-net").textContent = plan.net_usdt_tumbled;
   document.getElementById("tumb-frag-count").textContent = plan.total_micro_fragments;
+  const destElem = document.getElementById("tumb-dest");
+  if (destElem) {
+    destElem.textContent = plan.destination || plan.destination_address || "Arbitrum L2";
+  }
 
   const container = document.getElementById("tumb-routes-container");
   container.innerHTML = plan.routes.map(r => `
@@ -850,8 +854,35 @@ async function updateWeb3UI() {
       document.getElementById("web3-usdt-balance").textContent = `${formattedUsdt} USDT`;
       document.getElementById("web3-eth-balance").textContent = `${formattedEth} ETH`;
     }
+
+    const withdrawDestInput = document.getElementById("withdraw-dest");
+    if (withdrawDestInput && (!withdrawDestInput.value || withdrawDestInput.value.includes("0xColdStorage"))) {
+      withdrawDestInput.value = web3UserAddress;
+    }
   } catch (e) {
     console.error("Error leyendo balances Web3:", e);
+  }
+}
+
+function useMetaMaskAddressForWithdraw() {
+  if (web3UserAddress) {
+    const destInput = document.getElementById("withdraw-dest");
+    if (destInput) {
+      destInput.value = web3UserAddress;
+      setInputError(destInput, false);
+      showToast("Dirección MetaMask copiada al campo de retiro", "info");
+    }
+  } else {
+    connectMetaMask().then(() => {
+      if (web3UserAddress) {
+        const destInput = document.getElementById("withdraw-dest");
+        if (destInput) {
+          destInput.value = web3UserAddress;
+          setInputError(destInput, false);
+          showToast("MetaMask conectado y dirección configurada para el retiro", "success");
+        }
+      }
+    });
   }
 }
 

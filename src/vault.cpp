@@ -85,6 +85,7 @@ WithdrawalReceipt Vault::request_withdrawal(Amount tokens_gross) {
     receipt.fee_to_pool = fee;
     receipt.net_usdt_to_tumble = net_usdt;
     receipt.order_id = "ORD-" + to_hex(order_bytes, 16);
+    receipt.destination_address = "";
 
     return receipt;
 }

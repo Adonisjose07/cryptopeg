@@ -199,7 +199,9 @@ void RpcServer::setup_routes() {
                 {"gross_burned", format_usdt(w.gross_tokens_burned)},
                 {"fee_to_pool", format_usdt(w.fee_to_pool)},
                 {"net_tumbled", format_usdt(w.net_usdt_to_tumble)},
-                {"order_id", w.order_id}
+                {"net_amount_raw", w.net_usdt_to_tumble},
+                {"order_id", w.order_id},
+                {"destination", w.destination_address}
             });
         }
 

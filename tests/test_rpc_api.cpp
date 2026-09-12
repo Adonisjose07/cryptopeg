@@ -174,8 +174,18 @@ int main() {
     assert(b2_res["transactions"].size() == 1);
     std::cout << "  [OK] Detalle del bloque 2 verificado con su transacción de anillo.\n";
 
+    std::cout << "[PASO 12] Probando GET /api/v1/chain/block/3 (Detalle del bloque de retiro para el relayer)...\n";
+    res = cli.Get("/api/v1/chain/block/3");
+    assert(res && res->status == 200);
+    auto b3_res = json::parse(res->body);
+    assert(b3_res["height"] == 3);
+    assert(b3_res["withdrawals"].size() == 1);
+    assert(b3_res["withdrawals"][0]["destination"] == "0xBobExternalColdStorageWallet999");
+    assert(b3_res["withdrawals"][0]["net_amount_raw"] == 298500000ULL);
+    std::cout << "  [OK] Retiro verificado en bloque 3 con direccion de destino y monto raw exacto para el relayer L2.\n";
+
     // 10. Apagado del Servidor
-    std::cout << "[PASO 12] Deteniendo servidor RPC...\n";
+    std::cout << "[PASO 13] Deteniendo servidor RPC...\n";
     rpc.stop();
     assert(!rpc.is_running());
     std::cout << "  [OK] Servidor detenido limpiamente.\n";
