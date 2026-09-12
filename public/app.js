@@ -654,7 +654,7 @@ function renderTumblerRoutes(plan) {
   `).join("");
 }
 
-// Execute Treasury Fee Claim
+// Execute Treasury Fee Claim on Arbitrum Sepolia L2 with MetaMask
 async function executeClaimFees() {
   const btn = document.getElementById("btn-claim-fees");
   const amountInput = document.getElementById("claim-fee-amount");
@@ -665,33 +665,69 @@ async function executeClaimFees() {
 
   let hasError = false;
   if (!amount || amount <= 0) { setInputError(amountInput, true); hasError = true; }
-  if (!dest) { setInputError(addrInput, true); hasError = true; }
+  if (!dest || !ethers.isAddress(dest)) { setInputError(addrInput, true); hasError = true; }
 
   if (hasError) {
-    showToast("Ingresa un monto válido y la dirección de tesorería 0x...", "error");
+    showToast("Ingresa un monto válido y una dirección Ethereum (0x...) válida", "error");
     return;
   }
 
+  // 1. Asegurar que MetaMask esté conectado
+  if (!web3Signer || !web3UserAddress) {
+    await connectMetaMask();
+    if (!web3Signer || !web3UserAddress) {
+      showToast("Conecta MetaMask para autorizar el cobro on-chain en Arbitrum", "error");
+      return;
+    }
+  }
+
   btn.disabled = true;
-  btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-[#161C24] inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Procesando Retiro...`;
+  btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-[#161C24] inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> <span>Confirmando en MetaMask...</span>`;
 
   try {
-    const res = await fetch("/api/v1/vault/claim-fees", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        amount_usdt: amount,
-        treasury_address: dest
-      })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Fallo al reclamar comisiones");
+    const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, VAULT_ABI, web3Signer);
 
-    showToast(`Comisiones cobradas con éxito: ${data.amount_claimed_usdt} hacia ${data.destination_address.substring(0, 10)}...`, "success");
+    // 2. Verificar que la cuenta conectada sea el Owner
+    const contractOwner = await vaultContract.owner();
+    if (contractOwner.toLowerCase() !== web3UserAddress.toLowerCase()) {
+      throw new Error(`Solo el propietario del contrato (${contractOwner.slice(0, 6)}...${contractOwner.slice(-4)}) puede cobrar comisiones de tesorería.`);
+    }
+
+    const accumulatedOnChain = await vaultContract.accumulatedFees();
+    const amountUnits = ethers.parseUnits(amount.toString(), 6);
+    if (amountUnits > accumulatedOnChain) {
+      throw new Error(`El monto solicitado (${amount} USDT) supera las comisiones disponibles on-chain (${ethers.formatUnits(accumulatedOnChain, 6)} USDT).`);
+    }
+
+    showToast("Transfiriendo comisiones de tesorería en Arbitrum Sepolia...", "info");
+    const overrides = await getArbitrumTxOverrides(web3Provider);
+    const tx = await vaultContract.claimTreasuryFees(dest, amountUnits, overrides);
+    showToast(`Tx on-chain enviada: ${tx.hash.slice(0, 10)}... Esperando confirmación`, "info");
+
+    btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-[#161C24] inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> <span>Minando en Arbitrum L2...</span>`;
+    const receipt = await tx.wait();
+
+    // 3. Sincronizar contabilidad local con el nodo C++
+    try {
+      await fetch("/api/v1/vault/claim-fees", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount_usdt: amount,
+          treasury_address: dest
+        })
+      });
+    } catch (syncErr) {
+      console.warn("Aviso al sincronizar con nodo C++:", syncErr.message);
+    }
+
+    showToast(`¡Ganancias de ${amount.toFixed(2)} USDT transferidas exitosamente a ${dest.slice(0, 6)}...!`, "success");
     amountInput.value = "";
     fetchNodeData();
+    await updateWeb3UI();
   } catch (err) {
-    showToast(err.message, "error");
+    console.error("Error en cobro de tesorería:", err);
+    showToast(err.reason || err.message || "Fallo al cobrar comisiones de tesorería", "error");
   } finally {
     btn.disabled = false;
     btn.innerHTML = `<svg class="w-4 h-4 text-[#161C24]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"></path></svg> <span>Transferir Ganancias a Tesorería</span>`;
@@ -718,7 +754,9 @@ const VAULT_ABI = [
   "function depositFeeBps() external view returns (uint256)",
   "function accumulatedFees() external view returns (uint256)",
   "function getCollateralBalance() external view returns (uint256)",
-  "function getCirculatingBacking() external view returns (uint256)"
+  "function getCirculatingBacking() external view returns (uint256)",
+  "function claimTreasuryFees(address treasuryDestination, uint256 amount) external",
+  "function owner() external view returns (address)"
 ];
 
 let web3Provider = null;
@@ -815,6 +853,23 @@ async function updateWeb3UI() {
     if (withdrawDestInput && (!withdrawDestInput.value || withdrawDestInput.value.includes("0xColdStorage"))) {
       withdrawDestInput.value = web3UserAddress;
     }
+
+    const treasuryDestInput = document.getElementById("claim-fee-address");
+    if (treasuryDestInput && !treasuryDestInput.value) {
+      treasuryDestInput.value = web3UserAddress;
+    }
+
+    // Consultar comisiones acumuladas directamente en la bóveda de Arbitrum L2
+    try {
+      const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, VAULT_ABI, web3Provider);
+      const accFees = await vaultContract.accumulatedFees();
+      const treasuryPoolDisplay = document.getElementById("treasury-pool-display");
+      if (treasuryPoolDisplay) {
+        treasuryPoolDisplay.textContent = `${parseFloat(ethers.formatUnits(accFees, 6)).toFixed(6)} USDT`;
+      }
+    } catch (contractErr) {
+      console.warn("No se pudo leer accumulatedFees() on-chain:", contractErr);
+    }
   } catch (e) {
     console.error("Error leyendo balances Web3:", e);
   }
@@ -836,6 +891,28 @@ function useMetaMaskAddressForWithdraw() {
           destInput.value = web3UserAddress;
           setInputError(destInput, false);
           showToast("MetaMask conectado y dirección configurada para el retiro", "success");
+        }
+      }
+    });
+  }
+}
+
+function useMetaMaskAddressForTreasury() {
+  if (web3UserAddress) {
+    const destInput = document.getElementById("claim-fee-address");
+    if (destInput) {
+      destInput.value = web3UserAddress;
+      setInputError(destInput, false);
+      showToast("Dirección MetaMask configurada para tesorería", "info");
+    }
+  } else {
+    connectMetaMask().then(() => {
+      if (web3UserAddress) {
+        const destInput = document.getElementById("claim-fee-address");
+        if (destInput) {
+          destInput.value = web3UserAddress;
+          setInputError(destInput, false);
+          showToast("MetaMask conectado y dirección de tesorería configurada", "success");
         }
       }
     });
