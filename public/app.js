@@ -315,9 +315,11 @@ async function generateWallet() {
     document.getElementById("w-spend-priv").textContent = data.spend_private_key;
     document.getElementById("w-view-priv").textContent = data.view_private_key;
 
-    // Auto populate scanner (Solo View-Key para 100% de confidencialidad)
+    // Auto populate scanner
     document.getElementById("scan-view-priv").value = data.view_private_key;
     document.getElementById("scan-spend-pub").value = data.spend_public_key;
+    const spInput = document.getElementById("scan-spend-priv");
+    if (spInput) spInput.value = data.spend_private_key;
 
     showToast("Nueva billetera furtiva generada con éxito", "success");
   } catch (err) {
@@ -337,14 +339,16 @@ function useCurrentWalletAsRecipient() {
   }
 }
 
-// Scan Wallet Balance by View-Key (Sin exponer Spend-Key al nodo)
+// Scan Wallet Balance (Modo Sólo Vista o Modo Verificación Completa con Spend Key)
 async function scanWalletBalance() {
   const btn = document.getElementById("btn-scan");
   const viewPrivInput = document.getElementById("scan-view-priv");
   const spendPubInput = document.getElementById("scan-spend-pub");
+  const spendPrivInput = document.getElementById("scan-spend-priv");
 
   const viewPriv = viewPrivInput.value.trim();
   const spendPub = spendPubInput.value.trim();
+  const spendPriv = spendPrivInput ? spendPrivInput.value.trim() : "";
 
   let hasError = false;
   if (!viewPriv) {
@@ -368,6 +372,9 @@ async function scanWalletBalance() {
       view_private_key: viewPriv,
       spend_public_key: spendPub
     };
+    if (spendPriv) {
+      payload.spend_private_key = spendPriv;
+    }
 
     const res = await fetch("/api/v1/wallet/scan", {
       method: "POST",
@@ -377,83 +384,139 @@ async function scanWalletBalance() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Fallo al escanear");
 
-    // Filtrar localmente en el navegador según las salidas que este usuario ya gastó
-    const allOutputs = [...(data.outputs || []), ...(data.spent_outputs || [])];
-    const activeOutputs = [];
-    const spentOutputs = [];
-    let activeTotalUnits = 0;
-
-    for (const o of allOutputs) {
-      if (isUtxoSpentLocally(o.destination_one_time) || o.is_spent) {
-        spentOutputs.push(o);
-      } else {
-        activeOutputs.push(o);
-        activeTotalUnits += Number(o.amount_units || 0);
-      }
-    }
-
-    const activeTotalUsdt = (activeTotalUnits / 1000000).toFixed(6) + " USDT";
-
     document.getElementById("scan-results").classList.remove("hidden");
-    document.getElementById("scan-total-bal").textContent = activeTotalUsdt;
-    document.getElementById("scan-out-count").textContent = activeOutputs.length;
-
+    const modeBanner = document.getElementById("scan-mode-banner");
+    const balLabel = document.getElementById("scan-bal-label");
+    const balBadge = document.getElementById("scan-bal-badge");
+    const totalBal = document.getElementById("scan-total-bal");
+    const countLabel = document.getElementById("scan-count-label");
+    const activeTitle = document.getElementById("scan-active-title");
+    const utxoCount = document.getElementById("scan-out-count");
     const list = document.getElementById("scan-utxo-list");
-    if (activeOutputs.length === 0) {
-      list.innerHTML = `
-        <div class="bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-6 rounded-xl text-center space-y-1">
-          <div class="text-xs font-semibold text-[#F9FAFB]">Sin Salidas Disponibles</div>
-          <div class="text-xs text-[#919EAB]">No se encontraron UTXOs activos disponibles para gastar.</div>
-        </div>`;
-    } else {
-      list.innerHTML = activeOutputs.map(o => `
-        <div class="bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-          <div>
-            <div class="font-bold text-[#00A76F] mono text-sm">${o.amount_usdt}</div>
-            <div class="text-[11px] text-[#919EAB] mono select-all truncate max-w-md mt-0.5" title="${o.destination_one_time}">
-              Destino P: ${o.destination_one_time}
-            </div>
-          </div>
-          <div class="flex items-center space-x-2 shrink-0">
-            <button onclick="copyToTxForm('${o.destination_one_time}')" class="bg-[#8E33FF]/15 hover:bg-[#8E33FF]/25 text-[#8E33FF] border border-[#8E33FF]/30 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer">Usar para Transferir</button>
-            <button onclick="copyToWithdrawForm('${o.destination_one_time}')" class="bg-[#00B8D9]/15 hover:bg-[#00B8D9]/25 text-[#00B8D9] border border-[#00B8D9]/30 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer">Usar para Retirar</button>
-            <button onclick="manuallyMarkSpent('${o.destination_one_time}')" title="Marcar como consumida" class="bg-[#161C24] hover:bg-[#FF5630]/20 text-[#919EAB] hover:text-[#FF5630] border border-[rgba(145,158,171,0.16)] hover:border-[#FF5630]/30 px-2 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer">Descartar</button>
-          </div>
-        </div>
-      `).join("");
-    }
-
-    // Historial de Salidas Gastadas
     const spentSection = document.getElementById("scan-spent-section");
     const spentList = document.getElementById("scan-spent-list");
     const spentCount = document.getElementById("scan-spent-count");
-    if (spentSection && spentList) {
-      if (spentOutputs.length > 0) {
-        spentSection.classList.remove("hidden");
-        if (spentCount) spentCount.textContent = spentOutputs.length;
-        spentList.innerHTML = spentOutputs.map(o => `
-          <div class="bg-[#161C24]/60 border border-[rgba(145,158,171,0.12)] p-3 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs opacity-75">
+
+    totalBal.textContent = data.total_balance_usdt;
+    utxoCount.textContent = data.outputs_count;
+
+    if (data.is_watch_only) {
+      // 1. MODO SÓLO LECTURA (Watch-Only - Sin Spend Key)
+      balLabel.textContent = "Volumen Histórico Recibido (Bruto):";
+      balBadge.textContent = "MODO SÓLO LECTURA (WATCH-ONLY)";
+      balBadge.className = "text-[10px] px-2 py-0.5 rounded font-semibold uppercase bg-[#00B8D9]/15 text-[#00B8D9] border border-[#00B8D9]/30";
+      totalBal.className = "text-2xl font-bold mono mt-1 text-[#00B8D9]";
+      countLabel.textContent = "Salidas Recibidas Totales:";
+      activeTitle.textContent = "Salidas Detectadas en Cadena:";
+
+      modeBanner.className = "bg-[#00B8D9]/10 border border-[#00B8D9]/25 rounded-xl p-4 text-xs text-[#919EAB] flex items-start space-x-3";
+      modeBanner.innerHTML = `
+        <span class="p-1.5 bg-[#00B8D9]/15 text-[#00B8D9] rounded-lg shrink-0 mt-0.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        </span>
+        <div class="leading-relaxed space-y-1">
+          <div class="text-[#00B8D9] font-bold text-xs">Aviso de Modo Consulta (Solo View-Key)</div>
+          <div>Este monto de <strong class="text-[#F9FAFB] font-mono">${data.total_balance_usdt}</strong> representa el <strong>volumen total histórico recibido</strong> en tu dirección furtiva. Como las firmas de anillo RingCT MLSAG ocultan qué salidas fueron consumidas, una View-Key por sí sola no puede deducir los retiros o transferencias salientes.</div>
+          <div class="text-[#F9FAFB] font-medium pt-1">👉 Para verificar qué salidas ya gastaste y calcular tu <strong>Saldo Neto Real Disponible</strong>, ingresa tu <code class="text-[#FFAB00] font-mono">Spend Private Key</code> en el formulario de arriba.</div>
+        </div>
+      `;
+
+      if (spentSection) spentSection.classList.add("hidden");
+
+      if (data.outputs.length === 0) {
+        list.innerHTML = `
+          <div class="bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-6 rounded-xl text-center space-y-1">
+            <div class="text-xs font-semibold text-[#F9FAFB]">Sin Salidas Detectadas</div>
+            <div class="text-xs text-[#919EAB]">No se encontraron salidas asociadas a esta clave de vista.</div>
+          </div>`;
+      } else {
+        list.innerHTML = data.outputs.map(o => `
+          <div class="bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
             <div>
-              <div class="flex items-center space-x-2">
-                <span class="line-through text-[#919EAB] mono text-sm">${o.amount_usdt}</span>
-                <span class="text-[10px] bg-[#FF5630]/15 text-[#FF5630] font-bold px-2 py-0.5 rounded border border-[#FF5630]/30 uppercase">CONSUMIDA</span>
-              </div>
-              <div class="text-[11px] text-[#637381] mono select-all truncate max-w-md mt-0.5" title="${o.destination_one_time}">
+              <div class="font-bold text-[#00B8D9] mono text-sm">${o.amount_usdt}</div>
+              <div class="text-[11px] text-[#919EAB] mono select-all truncate max-w-md mt-0.5" title="${o.destination_one_time}">
                 Destino P: ${o.destination_one_time}
               </div>
             </div>
             <div class="flex items-center space-x-2 shrink-0">
-              <span class="text-[11px] text-[#919EAB] italic">Gastada</span>
-              <button onclick="manuallyUnmarkSpent('${o.destination_one_time}')" class="text-[10px] text-[#00A76F] hover:underline cursor-pointer">Restaurar</button>
+              <button onclick="copyToTxForm('${o.destination_one_time}')" class="bg-[#8E33FF]/15 hover:bg-[#8E33FF]/25 text-[#8E33FF] border border-[#8E33FF]/30 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer">Usar para Transferir</button>
+              <button onclick="copyToWithdrawForm('${o.destination_one_time}')" class="bg-[#00B8D9]/15 hover:bg-[#00B8D9]/25 text-[#00B8D9] border border-[#00B8D9]/30 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer">Usar para Retirar</button>
             </div>
           </div>
         `).join("");
-      } else {
-        spentSection.classList.add("hidden");
       }
-    }
 
-    showToast("Escaneo completado: " + activeTotalUsdt + " disponibles", "success");
+      showToast("Mostrando volumen histórico recibido (Modo Sólo Lectura)", "info");
+
+    } else {
+      // 2. MODO VERIFICACIÓN COMPLETA (Full Wallet - Con Spend Key)
+      balLabel.textContent = "Saldo Neto Real Disponible:";
+      balBadge.textContent = "VERIFICACIÓN COMPLETA (KEY IMAGES AUDITADAS)";
+      balBadge.className = "text-[10px] px-2 py-0.5 rounded font-semibold uppercase bg-[#00A76F]/15 text-[#00A76F] border border-[#00A76F]/30";
+      totalBal.className = "text-2xl font-bold mono mt-1 text-[#00A76F]";
+      countLabel.textContent = "Salidas UTXO No Gastadas:";
+      activeTitle.textContent = "Salidas UTXO Activas (Disponibles para Gastar):";
+
+      modeBanner.className = "bg-[#00A76F]/10 border border-[#00A76F]/25 rounded-xl p-4 text-xs text-[#919EAB] flex items-start space-x-3";
+      modeBanner.innerHTML = `
+        <span class="p-1.5 bg-[#00A76F]/15 text-[#00A76F] rounded-lg shrink-0 mt-0.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        </span>
+        <div class="leading-relaxed space-y-0.5">
+          <div class="text-[#00A76F] font-bold text-xs">Billetera Completa Verificada Criptográficamente</div>
+          <div>Cada una de tus salidas fue auditada calculando su Imagen de Clave (<code class="text-[#F9FAFB] font-mono">I = x·Hp(P)</code>) contra el ledger LMDB de la blockchain. Las salidas ya gastadas en transacciones previas han sido deducidas matemáticamente.</div>
+        </div>
+      `;
+
+      if (data.outputs.length === 0) {
+        list.innerHTML = `
+          <div class="bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-6 rounded-xl text-center space-y-1">
+            <div class="text-xs font-semibold text-[#F9FAFB]">Sin Salidas Disponibles</div>
+            <div class="text-xs text-[#919EAB]">No se encontraron UTXOs activos disponibles para gastar.</div>
+          </div>`;
+      } else {
+        list.innerHTML = data.outputs.map(o => `
+          <div class="bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div>
+              <div class="font-bold text-[#00A76F] mono text-sm">${o.amount_usdt}</div>
+              <div class="text-[11px] text-[#919EAB] mono select-all truncate max-w-md mt-0.5" title="${o.destination_one_time}">
+                Destino P: ${o.destination_one_time}
+              </div>
+            </div>
+            <div class="flex items-center space-x-2 shrink-0">
+              <button onclick="copyToTxForm('${o.destination_one_time}')" class="bg-[#8E33FF]/15 hover:bg-[#8E33FF]/25 text-[#8E33FF] border border-[#8E33FF]/30 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer">Usar para Transferir</button>
+              <button onclick="copyToWithdrawForm('${o.destination_one_time}')" class="bg-[#00B8D9]/15 hover:bg-[#00B8D9]/25 text-[#00B8D9] border border-[#00B8D9]/30 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer">Usar para Retirar</button>
+            </div>
+          </div>
+        `).join("");
+      }
+
+      // Renderizar Salidas Gastadas
+      if (spentSection && spentList) {
+        if (data.spent_outputs && data.spent_outputs.length > 0) {
+          spentSection.classList.remove("hidden");
+          if (spentCount) spentCount.textContent = data.spent_outputs.length;
+          spentList.innerHTML = data.spent_outputs.map(o => `
+            <div class="bg-[#161C24]/60 border border-[rgba(145,158,171,0.12)] p-3 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs opacity-75">
+              <div>
+                <div class="flex items-center space-x-2">
+                  <span class="line-through text-[#919EAB] mono text-sm">${o.amount_usdt}</span>
+                  <span class="text-[10px] bg-[#FF5630]/15 text-[#FF5630] font-bold px-2 py-0.5 rounded border border-[#FF5630]/30 uppercase">CONSUMIDA (Key Image en Ledger)</span>
+                </div>
+                <div class="text-[11px] text-[#637381] mono select-all truncate max-w-md mt-0.5" title="${o.destination_one_time}">
+                  Destino P: ${o.destination_one_time}
+                </div>
+              </div>
+              <div class="text-[11px] text-[#919EAB] italic">Deducida del saldo neto</div>
+            </div>
+          `).join("");
+        } else {
+          spentSection.classList.add("hidden");
+        }
+      }
+
+      showToast("Saldo neto verificado: " + data.total_balance_usdt + " disponibles", "success");
+    }
   } catch (err) {
     showToast(err.message, "error");
   } finally {

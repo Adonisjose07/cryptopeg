@@ -563,14 +563,29 @@
           </div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label class="block text-xs font-semibold text-[#919EAB] uppercase tracking-wider mb-1.5">View Private Key (b - Solo Lectura)</label>
+            <label class="block text-xs font-semibold text-[#919EAB] uppercase tracking-wider mb-1.5">View Private Key (b - Obligatoria)</label>
             <input type="text" id="scan-view-priv" placeholder="Clave privada de vista (64 hex)" class="w-full bg-[#161C24] border border-[rgba(145,158,171,0.16)] focus:border-[#00B8D9] focus:ring-1 focus:ring-[#00B8D9] rounded-xl px-4 py-3 text-xs text-[#F9FAFB] mono focus:outline-none transition">
           </div>
           <div>
-            <label class="block text-xs font-semibold text-[#919EAB] uppercase tracking-wider mb-1.5">Spend Public Key (A)</label>
+            <label class="block text-xs font-semibold text-[#919EAB] uppercase tracking-wider mb-1.5">Spend Public Key (A - Obligatoria)</label>
             <input type="text" id="scan-spend-pub" placeholder="Clave pública de gasto (64 hex)" class="w-full bg-[#161C24] border border-[rgba(145,158,171,0.16)] focus:border-[#00B8D9] focus:ring-1 focus:ring-[#00B8D9] rounded-xl px-4 py-3 text-xs text-[#F9FAFB] mono focus:outline-none transition">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-[#919EAB] uppercase tracking-wider mb-1.5 flex items-center justify-between">
+              <span>Spend Private Key (a)</span>
+              <span class="text-[10px] text-[#FFAB00] lowercase font-normal">opcional para saldo neto</span>
+            </label>
+            <input type="password" id="scan-spend-priv" placeholder="Clave privada de gasto para auditar salidas consumidas" class="w-full bg-[#161C24] border border-[rgba(145,158,171,0.16)] focus:border-[#FFAB00] focus:ring-1 focus:ring-[#FFAB00] rounded-xl px-4 py-3 text-xs text-[#F9FAFB] mono focus:outline-none transition">
+          </div>
+        </div>
+
+        <!-- Aviso de Cautela de la Spend Key -->
+        <div class="bg-[#FFAB00]/10 border border-[#FFAB00]/20 rounded-xl p-3 text-xs text-[#919EAB] flex items-start space-x-2.5">
+          <svg class="w-4 h-4 text-[#FFAB00] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+          <div class="leading-relaxed">
+            <span class="text-[#FFAB00] font-semibold">Aviso de Cautela Criptográfica:</span> Tu <code class="text-[#F9FAFB] font-mono">Spend Private Key</code> otorga autoridad total para firmar transferencias. En la privacidad RingCT, es matemáticamente necesaria para calcular las Imágenes de Clave y deducir qué salidas ya gastaste. Si la omites, el escáner funcionará en <strong class="text-[#00B8D9]">Modo Sólo Lectura (Watch-Only)</strong> reportando el volumen bruto histórico. Ingrésala únicamente en nodos de tu confianza (como tu propio nodo local).
           </div>
         </div>
 
@@ -581,26 +596,33 @@
 
         <!-- Resultados del Escaneo -->
         <div id="scan-results" class="hidden border-t border-[rgba(145,158,171,0.16)] pt-6 space-y-4">
-          <div class="flex items-center justify-between bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-4 rounded-xl">
+          
+          <!-- Banner Informativo Dinámico (Modo Watch-Only vs Full-Wallet) -->
+          <div id="scan-mode-banner" class="rounded-xl p-4 text-xs space-y-1.5 transition"></div>
+
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-4 rounded-xl gap-4">
             <div>
-              <span class="text-xs text-[#919EAB]">Saldo Privado Disponible:</span>
-              <div class="text-2xl font-bold text-[#00A76F] mono" id="scan-total-bal">0.000000 USDT</div>
+              <div class="flex items-center space-x-2">
+                <span class="text-xs text-[#919EAB]" id="scan-bal-label">Saldo Privado Disponible:</span>
+                <span id="scan-bal-badge" class="text-[10px] px-2 py-0.5 rounded font-semibold uppercase"></span>
+              </div>
+              <div class="text-2xl font-bold mono mt-1" id="scan-total-bal">0.000000 USDT</div>
             </div>
             <div class="text-right">
-              <span class="text-xs text-[#919EAB]">Salidas UTXO Propias:</span>
+              <span class="text-xs text-[#919EAB]" id="scan-count-label">Salidas UTXO Activas:</span>
               <div class="text-lg font-bold text-[#F9FAFB] mono" id="scan-out-count">0</div>
             </div>
           </div>
 
           <div class="space-y-3">
-            <h4 class="text-xs font-semibold text-[#919EAB] uppercase tracking-wider">Salidas UTXO Activas (Disponibles):</h4>
+            <h4 class="text-xs font-semibold text-[#919EAB] uppercase tracking-wider" id="scan-active-title">Salidas UTXO Activas (Disponibles):</h4>
             <div id="scan-utxo-list" class="space-y-2.5"></div>
           </div>
 
           <!-- Historial de Salidas Gastadas -->
           <div id="scan-spent-section" class="space-y-3 hidden pt-4 border-t border-[rgba(145,158,171,0.1)]">
             <h4 class="text-xs font-semibold text-[#919EAB] uppercase tracking-wider flex items-center gap-2">
-              <span>Historial de Salidas Gastadas:</span>
+              <span>Historial de Salidas Gastadas (Deducidas del Saldo):</span>
               <span class="text-[10px] bg-[#FF5630]/15 text-[#FF5630] font-bold px-2 py-0.5 rounded-full border border-[#FF5630]/30" id="scan-spent-count">0</span>
             </h4>
             <div id="scan-spent-list" class="space-y-2.5"></div>
