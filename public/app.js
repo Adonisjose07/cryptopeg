@@ -886,6 +886,43 @@ function useMetaMaskAddressForWithdraw() {
   }
 }
 
+// Faucet: Mint 10,000 MockUSDT for testing on Arbitrum Sepolia
+async function faucetMintUSDT() {
+  if (!web3Signer || !web3UserAddress) {
+    await connectMetaMask();
+    if (!web3Signer || !web3UserAddress) return;
+  }
+
+  const btn = document.getElementById("btn-faucet-mint");
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<svg class="animate-spin h-3 w-3 inline text-[#00A76F]" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> <span>Acuñando...</span>`;
+  }
+
+  try {
+    const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS, [
+      "function mint(address to, uint256 amount) external"
+    ], web3Signer);
+
+    showToast("Acuñando 10,000 USDT de prueba en Arbitrum Sepolia...", "info");
+    const amount = ethers.parseUnits("10000", 6);
+    const overrides = await getArbitrumTxOverrides(web3Provider);
+    const tx = await usdtContract.mint(web3UserAddress, amount, overrides);
+    showToast(`Tx enviada (${tx.hash.slice(0, 10)}...). Esperando confirmación`, "info");
+    await tx.wait();
+    showToast("¡10,000 MockUSDT acuñados exitosamente en tu MetaMask!", "success");
+    await updateWeb3UI();
+  } catch (err) {
+    console.error("Error al acuñar faucet USDT:", err);
+    showToast(err.message || "Error al solicitar fondos a la faucet", "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<span>+ Faucet 10,000 USDT</span>`;
+    }
+  }
+}
+
 // Helper: Generate a fresh stealth address and auto-paste
 async function generateAndUseNewStealthAddress() {
   await generateWallet();
