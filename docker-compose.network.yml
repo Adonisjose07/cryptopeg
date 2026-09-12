@@ -1,0 +1,61 @@
+services:
+  # Nodo Semilla Principal (Seed Node)
+  node-seed:
+    image: crypto-core-node:latest
+    container_name: crypto-node-seed
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_PORT=8080
+      - NODE_ID=node-seed-alpha
+      - P2P_LISTEN_URL=http://node-seed:8080
+      - CRYPTO_DATA_DIR=/app/data/lmdb
+    volumes:
+      - ./data/node_seed:/app/data
+    networks:
+      - crypto-mesh
+
+  # Nodo Validador Par 1 (Peer Node 1)
+  node-peer1:
+    image: crypto-core-node:latest
+    container_name: crypto-node-peer1
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    environment:
+      - NODE_PORT=8080
+      - NODE_ID=node-peer-beta
+      - P2P_LISTEN_URL=http://node-peer1:8080
+      - P2P_SEED_PEERS=http://node-seed:8080
+      - CRYPTO_DATA_DIR=/app/data/lmdb
+    depends_on:
+      - node-seed
+    volumes:
+      - ./data/node_peer1:/app/data
+    networks:
+      - crypto-mesh
+
+  # Nodo Validador Par 2 (Peer Node 2)
+  node-peer2:
+    image: crypto-core-node:latest
+    container_name: crypto-node-peer2
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    environment:
+      - NODE_PORT=8080
+      - NODE_ID=node-peer-gamma
+      - P2P_LISTEN_URL=http://node-peer2:8080
+      - P2P_SEED_PEERS=http://node-seed:8080
+      - CRYPTO_DATA_DIR=/app/data/lmdb
+    depends_on:
+      - node-seed
+    volumes:
+      - ./data/node_peer2:/app/data
+    networks:
+      - crypto-mesh
+
+networks:
+  crypto-mesh:
+    driver: bridge

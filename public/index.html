@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CryptoPeg USDT | Nodo Daemon & Dashboard de Privacidad</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              500: '#10b981',
+              600: '#059669',
+              700: '#047857'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    @keyframes pulse-slow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.05); }
+    }
+    .pulse-dot { animation: pulse-slow 2s infinite ease-in-out; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased selection:bg-emerald-500 selection:text-white">
+
+  <!-- TOP NAVIGATION / HEADER -->
+  <header class="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur-md sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+          <svg class="w-6 h-6 text-slate-950 font-bold" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <h1 class="text-lg font-bold tracking-tight text-white">CryptoPeg <span class="text-emerald-400">USDT</span></h1>
+            <span class="text-[10px] uppercase font-semibold tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full">Monero Privacy</span>
+          </div>
+          <p class="text-xs text-slate-400">Paridad 1:1 USDT | LMDB ACID Storage | DKSAP + RingCT</p>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-4">
+        <!-- Live Badge -->
+        <div class="flex items-center space-x-2 bg-slate-800/80 border border-slate-700/60 px-3 py-1.5 rounded-lg text-xs">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 pulse-dot"></span>
+          <span class="text-slate-300 font-medium" id="node-health-text">Nodo Conectado (Puerto 8080)</span>
+        </div>
+
+        <button onclick="fetchNodeData()" class="p-2 text-slate-400 hover:text-white bg-slate-800/50 hover:bg-slate-800 rounded-lg border border-slate-700/50 transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN CONTAINER -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+    <!-- SOLVENCY INVARIANT BANNER -->
+    <div id="solvency-banner" class="rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-900/60 to-emerald-950/40 border border-emerald-500/30 p-5 flex flex-col md:flex-row items-center justify-between gap-4 shadow-xl">
+      <div class="flex items-center space-x-4">
+        <div class="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400">
+          <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <h2 class="text-base font-bold text-white tracking-tight">Auditoría Matemática de Solvencia 1:1</h2>
+            <span class="text-xs bg-emerald-500 text-slate-950 font-extrabold px-2.5 py-0.5 rounded-full">100% RESPALDADO</span>
+          </div>
+          <p class="text-xs text-slate-400 mt-0.5">Invariante estricta: <span class="mono text-slate-200">Colateral Total ≡ Suministro Circulante + Reserva en Pool</span> (0 margen de error)</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-6 text-right">
+        <div>
+          <div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Comisión Depósito</div>
+          <div class="text-sm font-bold text-emerald-400" id="deposit-fee-rate">0.50% (50 bps)</div>
+        </div>
+        <div class="border-l border-slate-700/60 pl-6">
+          <div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Comisión Retiro</div>
+          <div class="text-sm font-bold text-emerald-400" id="withdraw-fee-rate">0.50% (50 bps)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- METRICS CARDS -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+      <!-- Card 1: Colateral Total -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 relative overflow-hidden group hover:border-slate-700 transition shadow-lg">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
+          <span>Colateral Bloqueado</span>
+          <span class="text-emerald-400">USDT</span>
+        </div>
+        <div class="text-2xl font-black text-white tracking-tight mono" id="metric-collateral">0.000000 USDT</div>
+        <p class="text-xs text-slate-500 mt-2 flex items-center">
+          <svg class="w-3.5 h-3.5 mr-1 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+          Garantía física en bóveda
+        </p>
+      </div>
+
+      <!-- Card 2: Suministro Privado -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 relative overflow-hidden group hover:border-slate-700 transition shadow-lg">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
+          <span>Suministro Circulante</span>
+          <span class="text-indigo-400">Privado</span>
+        </div>
+        <div class="text-2xl font-black text-white tracking-tight mono" id="metric-circulating">0.000000 USDT</div>
+        <p class="text-xs text-slate-500 mt-2 flex items-center">
+          <svg class="w-3.5 h-3.5 mr-1 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+          Tokens blindados en usuarios
+        </p>
+      </div>
+
+      <!-- Card 3: Pool de Comisiones -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 relative overflow-hidden group hover:border-slate-700 transition shadow-lg">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
+          <span>Reserva Pool de Comisiones</span>
+          <span class="text-amber-400">Rendimiento</span>
+        </div>
+        <div class="text-2xl font-black text-amber-400 tracking-tight mono" id="metric-fee-pool">0.000000 USDT</div>
+        <p class="text-xs text-slate-500 mt-2 flex items-center">
+          <svg class="w-3.5 h-3.5 mr-1 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+          Acumulado por entradas/salidas
+        </p>
+      </div>
+
+      <!-- Card 4: Altura de Blockchain LMDB -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 relative overflow-hidden group hover:border-slate-700 transition shadow-lg">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
+          <span>Blockchain & UTXOs</span>
+          <span class="text-teal-400">LMDB</span>
+        </div>
+        <div class="text-2xl font-black text-white tracking-tight mono" id="metric-height">0 bloques</div>
+        <p class="text-xs text-slate-500 mt-2 flex items-center justify-between">
+          <span>UTXOs en Ledger: <strong class="text-slate-300" id="metric-utxos">0</strong></span>
+          <span class="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-300">data.mdb</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- TABS CONTAINER -->
+    <div class="border-b border-slate-800">
+      <nav class="flex space-x-8 text-sm font-semibold" aria-label="Tabs">
+        <button onclick="switchTab('tab-vault')" id="btn-tab-vault" class="tab-btn border-b-2 border-emerald-500 text-emerald-400 pb-4 px-1 flex items-center space-x-2">
+          <span>🏛️ Bóveda 1:1 (Acuñar & Retirar)</span>
+        </button>
+        <button onclick="switchTab('tab-wallet')" id="btn-tab-wallet" class="tab-btn border-b-2 border-transparent text-slate-400 hover:text-slate-200 pb-4 px-1 flex items-center space-x-2">
+          <span>🕵️ Billetera & View-Key Scanner</span>
+        </button>
+        <button onclick="switchTab('tab-transfer')" id="btn-tab-transfer" class="tab-btn border-b-2 border-transparent text-slate-400 hover:text-slate-200 pb-4 px-1 flex items-center space-x-2">
+          <span>🔒 Transferencia Confidencial (RingCT)</span>
+        </button>
+        <button onclick="switchTab('tab-tumbler')" id="btn-tab-tumbler" class="tab-btn border-b-2 border-transparent text-slate-400 hover:text-slate-200 pb-4 px-1 flex items-center space-x-2">
+          <span>🔀 Mezclador de Retiro (Tumbler)</span>
+        </button>
+        <button onclick="switchTab('tab-explorer')" id="btn-tab-explorer" class="tab-btn border-b-2 border-transparent text-slate-400 hover:text-slate-200 pb-4 px-1 flex items-center space-x-2">
+          <span>⛓️ Explorador de Bloques LMDB</span>
+        </button>
+      </nav>
+    </div>
+
+    <!-- TAB 1: BÓVEDA 1:1 (DEPÓSITO & RETIRO) -->
+    <div id="tab-vault" class="tab-content grid grid-cols-1 lg:grid-cols-2 gap-8">
+      
+      <!-- Depósito / Compra -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+        <div class="border-b border-slate-800 pb-4">
+          <div class="flex items-center space-x-2">
+            <span class="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+            </span>
+            <h3 class="text-base font-bold text-white">Comprar Cripto con USDT (Acuñación 1:1)</h3>
+          </div>
+          <p class="text-xs text-slate-400 mt-1">El colateral queda en bóveda y se emite la cantidad neta menos 0.50% de comisión al pool a una dirección furtiva.</p>
+        </div>
+
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Monto en USDT Bruto</label>
+            <div class="relative">
+              <input type="number" id="deposit-amount" placeholder="1000.00" value="1000" step="10" oninput="updateDepositPreview()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono">
+              <span class="absolute right-4 top-2.5 text-xs text-slate-500 font-bold">USDT</span>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs font-semibold text-slate-300 uppercase">Dirección Stealth de Destino (DKSAP)</label>
+              <button onclick="useCurrentWalletAsRecipient()" class="text-[11px] text-emerald-400 hover:underline">Pegar Billetera Activa</button>
+            </div>
+            <input type="text" id="deposit-recipient" placeholder="STX..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 mono">
+          </div>
+
+          <!-- Preview de Comisiones -->
+          <div class="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3.5 space-y-2 text-xs">
+            <div class="flex justify-between text-slate-400">
+              <span>Depósito Bruto:</span>
+              <span class="text-slate-200 mono" id="prev-dep-gross">1000.000000 USDT</span>
+            </div>
+            <div class="flex justify-between text-slate-400">
+              <span>Comisión al Pool (0.50%):</span>
+              <span class="text-amber-400 mono" id="prev-dep-fee">- 5.000000 USDT</span>
+            </div>
+            <div class="flex justify-between font-bold border-t border-slate-800 pt-2 text-slate-200">
+              <span>Tokens Privados Emitidos 1:1:</span>
+              <span class="text-emerald-400 mono" id="prev-dep-net">995.000000 USDT</span>
+            </div>
+          </div>
+
+          <button onclick="executeDeposit()" id="btn-deposit" class="w-full bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-slate-950 font-bold py-3 rounded-xl shadow-lg shadow-emerald-500/10 transition flex items-center justify-center space-x-2">
+            <span>Acuñar Tokens Privados en LMDB</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Retiro / Quema con Tumbler -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+        <div class="border-b border-slate-800 pb-4">
+          <div class="flex items-center space-x-2">
+            <span class="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+            </span>
+            <h3 class="text-base font-bold text-white">Solicitar Retiro con Mezclador (Tumbler)</h3>
+          </div>
+          <p class="text-xs text-slate-400 mt-1">Quema tokens privados, deduce 0.50% al pool y dispersa el monto neto mediante microtransacciones con saltos efímeros.</p>
+        </div>
+
+        <div class="space-y-4">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Monto a Retirar</label>
+              <input type="number" id="withdraw-amount" placeholder="350.00" value="300" step="10" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-white font-mono">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">UTXO de Entrada</label>
+              <input type="text" id="withdraw-input-pub" placeholder="Pubkey del UTXO" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-white mono">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Spend Private Key</label>
+              <input type="password" id="withdraw-spend-priv" placeholder="Clave de gasto del quemador" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-white mono">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">View Private Key</label>
+              <input type="password" id="withdraw-view-priv" placeholder="Clave de vista" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-white mono">
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Billetera Externa de Destino (Cold Storage USDT)</label>
+            <input type="text" id="withdraw-dest" placeholder="0xDestinationExternalWallet..." value="0xColdStorageUSDT_VaultAddress777" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white mono">
+          </div>
+
+          <button onclick="executeWithdrawal()" id="btn-withdraw" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold py-3 rounded-xl shadow-lg shadow-indigo-500/10 transition flex items-center justify-center space-x-2">
+            <span>Ejecutar Retiro y Mezclador</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: BILLETERA & VIEW-KEY SCANNER -->
+    <div id="tab-wallet" class="tab-content hidden space-y-8">
+      
+      <!-- Generador de Billeteras -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4 mb-5">
+          <div>
+            <h3 class="text-base font-bold text-white">Identidad Criptográfica Stealth (DKSAP)</h3>
+            <p class="text-xs text-slate-400">Genera pares de claves de un solo uso con Ed25519 para transacciones irrastreables.</p>
+          </div>
+          <button onclick="generateWallet()" class="bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs flex items-center space-x-2 transition">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            <span>Generar Billetera Furtiva</span>
+          </button>
+        </div>
+
+        <div id="wallet-details" class="space-y-3 hidden">
+          <div>
+            <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Dirección Stealth Pública (Compartible):</span>
+            <div class="bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs mono text-emerald-400 break-all select-all mt-1" id="w-addr"></div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Spend Public Key (A):</span>
+              <div class="bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-[11px] mono text-slate-300 break-all select-all mt-1" id="w-spend-pub"></div>
+            </div>
+            <div>
+              <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">View Public Key (B):</span>
+              <div class="bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-[11px] mono text-slate-300 break-all select-all mt-1" id="w-view-pub"></div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <span class="text-[11px] font-semibold text-amber-400 uppercase tracking-wider">Spend Private Key (a - Ultra Secreto):</span>
+              <div class="bg-slate-950 border border-amber-500/20 rounded-xl p-2.5 text-[11px] mono text-amber-300 break-all select-all mt-1" id="w-spend-priv"></div>
+            </div>
+            <div>
+              <span class="text-[11px] font-semibold text-blue-400 uppercase tracking-wider">View Private Key (b - Para Escaneo):</span>
+              <div class="bg-slate-950 border border-blue-500/20 rounded-xl p-2.5 text-[11px] mono text-blue-300 break-all select-all mt-1" id="w-view-priv"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Escáner Furtivo por View-Key -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+        <div class="border-b border-slate-800 pb-4">
+          <div class="flex items-center space-x-2">
+            <span class="p-2 bg-blue-500/10 text-blue-400 rounded-lg">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+            </span>
+            <h3 class="text-base font-bold text-white">Escaneo de Saldo Privado con View-Key</h3>
+          </div>
+          <p class="text-xs text-slate-400 mt-1">El nodo escanea la blockchain LMDB para encontrar tus salidas furtivas <strong>sin necesidad de conocer tu clave de gasto</strong>.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">View Private Key (b)</label>
+            <input type="text" id="scan-view-priv" placeholder="Clave privada de vista (64 hex)" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white mono">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Spend Public Key (A)</label>
+            <input type="text" id="scan-spend-pub" placeholder="Clave pública de gasto (64 hex)" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white mono">
+          </div>
+        </div>
+
+        <button onclick="scanWalletBalance()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-2.5 rounded-xl text-xs flex items-center space-x-2 transition">
+          <span>Escanear Fondos en Blockchain</span>
+        </button>
+
+        <!-- Resultados del Escaneo -->
+        <div id="scan-results" class="hidden border-t border-slate-800 pt-4 space-y-4">
+          <div class="flex items-center justify-between bg-slate-950/80 border border-slate-800 p-4 rounded-xl">
+            <div>
+              <span class="text-xs text-slate-400">Saldo Privado Disponible:</span>
+              <div class="text-2xl font-black text-emerald-400 mono" id="scan-total-bal">0.000000 USDT</div>
+            </div>
+            <div class="text-right">
+              <span class="text-xs text-slate-400">Salidas UTXO Propias:</span>
+              <div class="text-lg font-bold text-white mono" id="scan-out-count">0</div>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <h4 class="text-xs font-semibold text-slate-300 uppercase">Salidas UTXO Detectadas:</h4>
+            <div id="scan-utxo-list" class="space-y-2"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: TRANSFERENCIA CONFIDENCIAL -->
+    <div id="tab-transfer" class="tab-content hidden bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+      <div class="border-b border-slate-800 pb-4">
+        <div class="flex items-center space-x-2">
+          <span class="p-2 bg-purple-500/10 text-purple-400 rounded-lg">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path></svg>
+          </span>
+          <h3 class="text-base font-bold text-white">Transferencia Oculta Monero-Style (RingCT + Señuelos)</h3>
+        </div>
+        <p class="text-xs text-slate-400 mt-1">Genera un anillo de 5 firmas con señuelos aleatorios del ledger. Un observador externo no puede saber quién envió, quién recibió ni relacionar carteras.</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Sender Spend Private Key (a)</label>
+          <input type="password" id="tx-spend-priv" placeholder="Clave de gasto del emisor" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-white mono">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Sender View Private Key (b)</label>
+          <input type="password" id="tx-view-priv" placeholder="Clave de vista del emisor" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-white mono">
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <div class="md:col-span-2">
+          <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">UTXO de Entrada (Pubkey P)</label>
+          <input type="text" id="tx-input-pub" placeholder="Pubkey del output a gastar" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-white mono">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Monto a Enviar (USDT)</label>
+          <input type="number" id="tx-amount" value="300" step="10" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-white font-mono">
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Dirección Stealth del Destinatario (DKSAP)</label>
+        <input type="text" id="tx-recipient" placeholder="STX..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white mono">
+      </div>
+
+      <button onclick="executeTransfer()" id="btn-transfer" class="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-3 px-8 rounded-xl shadow-lg shadow-purple-500/10 transition">
+        <span>Firmar con Anillo (MLSAG) y Enviar</span>
+      </button>
+
+      <!-- Resultado de la Transferencia -->
+      <div id="tx-result" class="hidden border-t border-slate-800 pt-4 space-y-3">
+        <div class="bg-emerald-950/30 border border-emerald-500/30 p-4 rounded-xl space-y-2">
+          <div class="flex items-center space-x-2 text-emerald-400 font-bold text-sm">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+            <span>Transacción Oculta Asentada con Éxito</span>
+          </div>
+          <div class="text-xs text-slate-300">Minada en Bloque: <strong class="text-white mono" id="res-tx-block"></strong></div>
+          <div class="text-xs text-slate-300 break-all">Hash TX: <span class="mono text-emerald-400" id="res-tx-hash"></span></div>
+          <div class="text-xs text-slate-300 break-all">Imagen de Clave (Anti-Doble Gasto): <span class="mono text-amber-400" id="res-tx-keyimg"></span></div>
+          <div class="text-xs text-slate-300">Participantes en Anillo: <span class="mono text-white" id="res-tx-ring">5</span> (1 real + 4 señuelos)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: MEZCLADOR TUMBLER -->
+    <div id="tab-tumbler" class="tab-content hidden space-y-6">
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+        <div class="border-b border-slate-800 pb-4">
+          <h3 class="text-base font-bold text-white">Visualizador del Mezclador (Micro-Tumbler con Poisson Jitter)</h3>
+          <p class="text-xs text-slate-400 mt-1">Inspección de la dispersión de micro-tranches y saltos efímeros antes de entregar el USDT a la billetera externa.</p>
+        </div>
+
+        <div id="tumbler-empty" class="text-center py-8 text-slate-500 text-xs">
+          No hay retiros recientes procesados en esta sesión. Realiza un retiro en la pestaña "Bóveda 1:1" para ver la dispersión en tiempo real.
+        </div>
+
+        <div id="tumbler-visual" class="hidden space-y-4">
+          <div class="flex flex-wrap items-center justify-between bg-slate-950 p-4 rounded-xl border border-slate-800 gap-2">
+            <div>
+              <span class="text-xs text-slate-400">Orden de Retiro:</span>
+              <div class="text-sm font-bold text-indigo-400 mono" id="tumb-order">ORD-...</div>
+            </div>
+            <div>
+              <span class="text-xs text-slate-400">Tokens Quemados:</span>
+              <div class="text-sm font-bold text-white mono" id="tumb-burned">-</div>
+            </div>
+            <div>
+              <span class="text-xs text-slate-400">Comisión al Pool:</span>
+              <div class="text-sm font-bold text-amber-400 mono" id="tumb-fee">-</div>
+            </div>
+            <div>
+              <span class="text-xs text-slate-400">Neto Dispersado:</span>
+              <div class="text-sm font-bold text-emerald-400 mono" id="tumb-net">-</div>
+            </div>
+          </div>
+
+          <div class="space-y-3">
+            <h4 class="text-xs font-semibold text-slate-300 uppercase">Microtransacciones Fragmentadas (<span id="tumb-frag-count">0</span> lotes):</h4>
+            <div id="tumb-routes-container" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 5: EXPLORADOR DE BLOQUES LMDB -->
+    <div id="tab-explorer" class="tab-content hidden space-y-5">
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+          <div>
+            <h3 class="text-base font-bold text-white">Explorador de Cadena de Bloques LMDB</h3>
+            <p class="text-xs text-slate-400">Bloques persistidos en disco con verificación de árbol de Merkle y hashes encadenados.</p>
+          </div>
+          <button onclick="fetchBlocks()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700 transition">
+            Actualizar Bloques
+          </button>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead>
+              <tr class="border-b border-slate-800 text-slate-400 uppercase text-[10px] tracking-wider">
+                <th class="py-3 px-3">Altura</th>
+                <th class="py-3 px-3">Hash del Bloque</th>
+                <th class="py-3 px-3">Raíz de Merkle</th>
+                <th class="py-3 px-3">Timestamp</th>
+                <th class="py-3 px-3 text-center">TXs</th>
+                <th class="py-3 px-3 text-center">Depósitos</th>
+                <th class="py-3 px-3 text-center">Retiros</th>
+              </tr>
+            </thead>
+            <tbody id="blocks-tbody" class="divide-y divide-slate-800/60 mono text-slate-300">
+              <tr>
+                <td colspan="7" class="py-8 text-center text-slate-500">Cargando bloques desde LMDB...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- NOTIFICATION TOAST -->
+  <div id="toast" class="fixed bottom-5 right-5 z-50 transform transition-all duration-300 translate-y-20 opacity-0 pointer-events-none">
+    <div id="toast-card" class="bg-slate-900 border border-slate-700 px-4 py-3 rounded-xl shadow-2xl flex items-center space-x-3 text-xs">
+      <span id="toast-icon"></span>
+      <span id="toast-msg" class="font-medium text-white"></span>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

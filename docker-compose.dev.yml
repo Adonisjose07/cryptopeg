@@ -1,0 +1,30 @@
+services:
+  crypto-core-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: crypto-core-node:latest
+    container_name: crypto-dev-node
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_ENV=development
+      - NODE_PORT=8080
+      - USDT_VAULT_ADDRESS=${USDT_VAULT_ADDRESS:-0xVaultCollateralReserveUSDT}
+      - INITIAL_COLLATERAL_USDT=${INITIAL_COLLATERAL_USDT:-1000000.000000}
+      - DEPOSIT_FEE_BPS=${DEPOSIT_FEE_BPS:-50}
+      - WITHDRAW_FEE_BPS=${WITHDRAW_FEE_BPS:-50}
+      - TUMBLER_MIN_FRAGMENTS=${TUMBLER_MIN_FRAGMENTS:-5}
+      - TUMBLER_MAX_FRAGMENTS=${TUMBLER_MAX_FRAGMENTS:-15}
+      - TUMBLER_MIN_HOPS=${TUMBLER_MIN_HOPS:-2}
+      - TUMBLER_MAX_HOPS=${TUMBLER_MAX_HOPS:-4}
+      - CRYPTO_DATA_DIR=${CRYPTO_DATA_DIR:-/app/data/lmdb}
+      - TUMBLER_POISSON_MEAN_DELAY_MS=${TUMBLER_POISSON_MEAN_DELAY_MS:-250}
+      - NODE_ID=${NODE_ID:-}
+      - P2P_LISTEN_URL=${P2P_LISTEN_URL:-}
+      - P2P_SEED_PEERS=${P2P_SEED_PEERS:-}
+    volumes:
+      - ./data:/app/data
+    stdin_open: true
+    tty: true

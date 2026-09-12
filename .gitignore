@@ -1,0 +1,32 @@
+# Build artifacts
+build/
+bin/
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+
+# LMDB and node persistence data
+data/
+*.mdb
+*.lock
+
+# Environment and secret files
+.env
+.env.*
+!.env.example
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local binaries and wallet files
+crypto_wallet_cli
+crypto_node
+*.wallet
+test_*
+tests/
+*.log
