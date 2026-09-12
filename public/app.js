@@ -1,3 +1,7 @@
+// =================================================================
+// CryptoPeg USDT Dashboard - Open Design System (El Origen Standard)
+// =================================================================
+
 // State
 let currentActiveWallet = null;
 let lastTumblerPlan = null;
@@ -7,11 +11,12 @@ document.addEventListener("DOMContentLoaded", () => {
   fetchNodeData();
   fetchBlocks();
   updateDepositPreview();
+  setupInputListeners();
   // Auto-refresh every 4 seconds
   setInterval(fetchNodeData, 4000);
 });
 
-// Toast notification helper
+// Toast notification helper with Open Design System tokens
 function showToast(message, type = "success") {
   const toast = document.getElementById("toast");
   const card = document.getElementById("toast-card");
@@ -19,34 +24,85 @@ function showToast(message, type = "success") {
   const icon = document.getElementById("toast-icon");
 
   msg.textContent = message;
+
   if (type === "success") {
-    card.className = "bg-emerald-950/90 border border-emerald-500/50 px-4 py-3 rounded-xl shadow-2xl flex items-center space-x-3 text-xs text-emerald-200";
-    icon.innerHTML = `<svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>`;
+    card.className = "bg-[#212B36] border border-[#00A76F]/60 px-4 py-3.5 rounded-xl shadow-elevated flex items-center space-x-3 text-xs max-w-md text-[#F9FAFB]";
+    icon.innerHTML = `<svg class="w-4 h-4 text-[#00A76F] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path></svg>`;
+  } else if (type === "error") {
+    card.className = "bg-[#212B36] border border-[#FF5630]/60 px-4 py-3.5 rounded-xl shadow-elevated flex items-center space-x-3 text-xs max-w-md text-[#F9FAFB]";
+    icon.innerHTML = `<svg class="w-4 h-4 text-[#FF5630] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"></path></svg>`;
+  } else if (type === "warning") {
+    card.className = "bg-[#212B36] border border-[#FFAB00]/60 px-4 py-3.5 rounded-xl shadow-elevated flex items-center space-x-3 text-xs max-w-md text-[#F9FAFB]";
+    icon.innerHTML = `<svg class="w-4 h-4 text-[#FFAB00] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>`;
   } else {
-    card.className = "bg-rose-950/90 border border-rose-500/50 px-4 py-3 rounded-xl shadow-2xl flex items-center space-x-3 text-xs text-rose-200";
-    icon.innerHTML = `<svg class="w-4 h-4 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>`;
+    // info
+    card.className = "bg-[#212B36] border border-[#00B8D9]/60 px-4 py-3.5 rounded-xl shadow-elevated flex items-center space-x-3 text-xs max-w-md text-[#F9FAFB]";
+    icon.innerHTML = `<svg class="w-4 h-4 text-[#00B8D9] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>`;
   }
 
   toast.classList.remove("translate-y-20", "opacity-0", "pointer-events-none");
   setTimeout(() => {
     toast.classList.add("translate-y-20", "opacity-0", "pointer-events-none");
-  }, 4000);
+  }, 4500);
 }
 
-// Tab switcher
+// Copy to Clipboard helper
+function copyToClipboard(text, label = "Dato") {
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    showToast(`Copiado al portapapeles: ${label}`, "info");
+  }).catch(() => {
+    showToast(`Error al copiar ${label}`, "error");
+  });
+}
+
+// Quick amount selector for deposit
+function setDepositAmount(val) {
+  const input = document.getElementById("deposit-amount");
+  if (input) {
+    input.value = val;
+    clearInputError(input);
+    updateDepositPreview();
+  }
+}
+
+// Visual error helpers for inputs
+function setInputError(el, hasError) {
+  if (!el) return;
+  if (hasError) {
+    el.classList.add("border-[#FF5630]", "ring-1", "ring-[#FF5630]");
+    el.classList.remove("border-[rgba(145,158,171,0.16)]");
+  } else {
+    el.classList.remove("border-[#FF5630]", "ring-1", "ring-[#FF5630]");
+    el.classList.add("border-[rgba(145,158,171,0.16)]");
+  }
+}
+
+function clearInputError(el) {
+  setInputError(el, false);
+}
+
+function setupInputListeners() {
+  const inputs = document.querySelectorAll("input");
+  inputs.forEach(inp => {
+    inp.addEventListener("input", () => clearInputError(inp));
+  });
+}
+
+// Tab switcher with Open Design System styling
 function switchTab(tabId) {
   document.querySelectorAll(".tab-content").forEach(el => el.classList.add("hidden"));
   document.querySelectorAll(".tab-btn").forEach(btn => {
-    btn.classList.remove("border-emerald-500", "text-emerald-400");
-    btn.classList.add("border-transparent", "text-slate-400");
+    btn.classList.remove("border-[#00A76F]", "text-[#F9FAFB]", "bg-[#212B36]/60");
+    btn.classList.add("border-transparent", "text-[#919EAB]");
   });
 
   const activeContent = document.getElementById(tabId);
   const activeBtn = document.getElementById("btn-" + tabId);
   if (activeContent) activeContent.classList.remove("hidden");
   if (activeBtn) {
-    activeBtn.classList.remove("border-transparent", "text-slate-400");
-    activeBtn.classList.add("border-emerald-500", "text-emerald-400");
+    activeBtn.classList.remove("border-transparent", "text-[#919EAB]");
+    activeBtn.classList.add("border-[#00A76F]", "text-[#F9FAFB]", "bg-[#212B36]/60");
   }
 
   if (tabId === "tab-explorer") {
@@ -64,52 +120,91 @@ async function fetchNodeData() {
     document.getElementById("metric-collateral").textContent = data.vault.total_collateral_usdt;
     document.getElementById("metric-circulating").textContent = data.vault.circulating_shielded_supply;
     document.getElementById("metric-fee-pool").textContent = data.vault.fee_pool_reserve_usdt;
+    
     const tDisplay = document.getElementById("treasury-pool-display");
     if (tDisplay) tDisplay.textContent = data.vault.fee_pool_reserve_usdt;
+    
     document.getElementById("metric-height").textContent = data.blockchain_height + " bloques";
     document.getElementById("metric-utxos").textContent = data.utxo_pool_count;
 
     document.getElementById("deposit-fee-rate").textContent = (data.vault.deposit_fee_bps / 100).toFixed(2) + "% (" + data.vault.deposit_fee_bps + " bps)";
     document.getElementById("withdraw-fee-rate").textContent = (data.vault.withdraw_fee_bps / 100).toFixed(2) + "% (" + data.vault.withdraw_fee_bps + " bps)";
 
-    document.getElementById("node-health-text").textContent = "Nodo Conectado (" + data.blockchain_height + " bloques)";
+    const healthDot = document.getElementById("node-health-dot");
+    const healthText = document.getElementById("node-health-text");
+    if (healthDot && healthText) {
+      healthDot.className = "w-2.5 h-2.5 rounded-full bg-[#00A76F] pulse-dot";
+      healthText.textContent = "Nodo Conectado (" + data.blockchain_height + " blq)";
+      healthText.className = "text-[#F9FAFB] font-medium";
+    }
   } catch (err) {
-    document.getElementById("node-health-text").textContent = "Conectando al Nodo...";
+    const healthDot = document.getElementById("node-health-dot");
+    const healthText = document.getElementById("node-health-text");
+    if (healthDot && healthText) {
+      healthDot.className = "w-2.5 h-2.5 rounded-full bg-[#FFAB00] animate-ping";
+      healthText.textContent = "Reconectando al Nodo...";
+      healthText.className = "text-[#FFAB00] font-medium";
+    }
   }
 }
 
 // Fetch Blocks for Explorer
 async function fetchBlocks() {
+  const tbody = document.getElementById("blocks-tbody");
+  if (!tbody) return;
+
   try {
     const res = await fetch("/api/v1/chain/blocks?limit=25");
-    if (!res.ok) return;
+    if (!res.ok) throw new Error("Error HTTP " + res.status);
     const data = await res.json();
-    const tbody = document.getElementById("blocks-tbody");
 
+    // Estado Vacío (Obligatorio UI)
     if (!data.blocks || data.blocks.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="7" class="py-6 text-center text-slate-500">No se encontraron bloques en LMDB.</td></tr>`;
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="7" class="py-12 text-center text-[#919EAB]">
+            <div class="max-w-xs mx-auto space-y-2">
+              <svg class="w-10 h-10 mx-auto text-[#637381]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
+              </svg>
+              <div class="text-sm font-semibold text-[#F9FAFB]">Sin Bloques en el Ledger</div>
+              <div class="text-xs text-[#919EAB]">No se encontraron bloques registrados en LMDB.</div>
+            </div>
+          </td>
+        </tr>`;
       return;
     }
 
     tbody.innerHTML = data.blocks.map(b => `
-      <tr class="hover:bg-slate-900/80 transition">
-        <td class="py-3 px-3 font-bold text-emerald-400">#${b.height}</td>
-        <td class="py-3 px-3 text-slate-300 select-all" title="${b.hash}">${b.hash.substring(0, 16)}...</td>
-        <td class="py-3 px-3 text-slate-400 select-all" title="${b.merkle_root}">${b.merkle_root.substring(0, 16)}...</td>
-        <td class="py-3 px-3 text-slate-400">${new Date(b.timestamp * 1000).toLocaleTimeString()}</td>
-        <td class="py-3 px-3 text-center"><span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-semibold">${b.tx_count}</span></td>
-        <td class="py-3 px-3 text-center"><span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-semibold">${b.deposit_count}</span></td>
-        <td class="py-3 px-3 text-center"><span class="px-2 py-0.5 rounded bg-purple-950 text-purple-400 font-semibold">${b.withdrawal_count}</span></td>
+      <tr class="hover:bg-[#161C24]/80 transition">
+        <td class="py-3 px-4 font-bold text-[#00A76F]">#${b.height}</td>
+        <td class="py-3 px-4 text-[#919EAB] hover:text-[#F9FAFB] cursor-pointer transition select-all" onclick="copyToClipboard('${b.hash}', 'Hash del Bloque #${b.height}')" title="Clic para copiar: ${b.hash}">
+          ${b.hash.substring(0, 16)}...
+        </td>
+        <td class="py-3 px-4 text-[#919EAB] hover:text-[#F9FAFB] cursor-pointer transition select-all" onclick="copyToClipboard('${b.merkle_root}', 'Raíz Merkle #${b.height}')" title="Clic para copiar: ${b.merkle_root}">
+          ${b.merkle_root.substring(0, 16)}...
+        </td>
+        <td class="py-3 px-4 text-[#919EAB] text-[11px]">${new Date(b.timestamp * 1000).toLocaleTimeString()}</td>
+        <td class="py-3 px-4 text-center"><span class="px-2 py-0.5 rounded-md bg-[#161C24] text-[#00B8D9] border border-[#00B8D9]/25 font-semibold text-[11px]">${b.tx_count}</span></td>
+        <td class="py-3 px-4 text-center"><span class="px-2 py-0.5 rounded-md bg-[#00A76F]/10 text-[#00A76F] border border-[#00A76F]/30 font-semibold text-[11px]">${b.deposit_count}</span></td>
+        <td class="py-3 px-4 text-center"><span class="px-2 py-0.5 rounded-md bg-[#8E33FF]/10 text-[#8E33FF] border border-[#8E33FF]/30 font-semibold text-[11px]">${b.withdrawal_count}</span></td>
       </tr>
     `).join("");
   } catch (err) {
-    console.error(err);
+    console.error("Error al cargar bloques:", err);
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="7" class="py-6 text-center text-[#FF5630] text-xs">
+          Error al conectar con la base de datos de bloques LMDB.
+        </td>
+      </tr>`;
   }
 }
 
 // Deposit Calculation Preview
 function updateDepositPreview() {
-  const gross = parseFloat(document.getElementById("deposit-amount").value) || 0;
+  const amountInput = document.getElementById("deposit-amount");
+  const gross = parseFloat(amountInput.value) || 0;
   const feeRate = 0.005; // 50 bps
   const fee = gross * feeRate;
   const net = gross - fee;
@@ -119,23 +214,29 @@ function updateDepositPreview() {
   document.getElementById("prev-dep-net").textContent = net.toFixed(6) + " USDT";
 }
 
-// Execute Deposit
+// Execute Local / Dev Deposit
 async function executeDeposit() {
   const btn = document.getElementById("btn-deposit");
-  const gross = parseFloat(document.getElementById("deposit-amount").value);
-  const recipient = document.getElementById("deposit-recipient").value.trim();
+  const amountInput = document.getElementById("deposit-amount");
+  const recipInput = document.getElementById("deposit-recipient");
+  const gross = parseFloat(amountInput.value);
+  const recipient = recipInput.value.trim();
 
+  let hasError = false;
   if (!gross || gross <= 0) {
-    showToast("Ingresa un monto válido en USDT", "error");
-    return;
+    setInputError(amountInput, true);
+    showToast("Ingresa un monto válido en USDT mayor a 0", "error");
+    hasError = true;
   }
   if (!recipient.startsWith("STX")) {
-    showToast("Ingresa una dirección Stealth válida (comienza con STX)", "error");
-    return;
+    setInputError(recipInput, true);
+    showToast("Ingresa una dirección Stealth válida que inicie con STX", "error");
+    hasError = true;
   }
+  if (hasError) return;
 
   btn.disabled = true;
-  btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-slate-950" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Minando Bloque en LMDB...`;
+  btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-[#F9FAFB] inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Minando Bloque en LMDB...`;
 
   try {
     const res = await fetch("/api/v1/vault/deposit", {
@@ -153,11 +254,11 @@ async function executeDeposit() {
     showToast(err.message, "error");
   } finally {
     btn.disabled = false;
-    btn.innerHTML = "<span>Acuñar Tokens Privados en LMDB</span>";
+    btn.innerHTML = "<span>Simular Acuñación Directa en LMDB (Dev / Offline)</span>";
   }
 }
 
-// Generate Wallet
+// Generate Stealth Wallet
 async function generateWallet() {
   try {
     const res = await fetch("/api/v1/wallet/generate", { method: "POST" });
@@ -175,7 +276,7 @@ async function generateWallet() {
     document.getElementById("scan-view-priv").value = data.view_private_key;
     document.getElementById("scan-spend-pub").value = data.spend_public_key;
 
-    showToast("Nueva billetera furtiva generada con éxito");
+    showToast("Nueva billetera furtiva generada con éxito", "success");
   } catch (err) {
     showToast("Fallo al generar billetera: " + err.message, "error");
   }
@@ -183,23 +284,40 @@ async function generateWallet() {
 
 function useCurrentWalletAsRecipient() {
   if (currentActiveWallet) {
-    document.getElementById("deposit-recipient").value = currentActiveWallet.stealth_address;
-    showToast("Dirección copiada al campo de depósito");
+    const recip = document.getElementById("deposit-recipient");
+    recip.value = currentActiveWallet.stealth_address;
+    clearInputError(recip);
+    showToast("Dirección furtiva pegada al formulario de depósito", "success");
   } else {
-    showToast("Genera primero una billetera en la pestaña 'Billetera'", "error");
+    showToast("Genera primero una billetera en la pestaña 'Billetera'", "warning");
     switchTab("tab-wallet");
   }
 }
 
 // Scan Wallet Balance by View-Key
 async function scanWalletBalance() {
-  const viewPriv = document.getElementById("scan-view-priv").value.trim();
-  const spendPub = document.getElementById("scan-spend-pub").value.trim();
+  const btn = document.getElementById("btn-scan");
+  const viewPrivInput = document.getElementById("scan-view-priv");
+  const spendPubInput = document.getElementById("scan-spend-pub");
+  const viewPriv = viewPrivInput.value.trim();
+  const spendPub = spendPubInput.value.trim();
 
-  if (!viewPriv || !spendPub) {
+  let hasError = false;
+  if (!viewPriv) {
+    setInputError(viewPrivInput, true);
+    hasError = true;
+  }
+  if (!spendPub) {
+    setInputError(spendPubInput, true);
+    hasError = true;
+  }
+  if (hasError) {
     showToast("Ingresa View Private Key y Spend Public Key", "error");
     return;
   }
+
+  btn.disabled = true;
+  btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-[#161C24] inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Escaneando Ledger LMDB...`;
 
   try {
     const res = await fetch("/api/v1/wallet/scan", {
@@ -215,26 +333,36 @@ async function scanWalletBalance() {
     document.getElementById("scan-out-count").textContent = data.outputs_count;
 
     const list = document.getElementById("scan-utxo-list");
+    // Estado Vacío de Resultados
     if (data.outputs.length === 0) {
-      list.innerHTML = `<div class="text-xs text-slate-500 py-2">No se detectaron salidas activas para esta identidad.</div>`;
+      list.innerHTML = `
+        <div class="bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-6 rounded-xl text-center space-y-1">
+          <div class="text-xs font-semibold text-[#F9FAFB]">Sin Salidas Detectadas</div>
+          <div class="text-xs text-[#919EAB]">No se encontraron UTXOs activos asociados a este par de claves.</div>
+        </div>`;
     } else {
       list.innerHTML = data.outputs.map(o => `
-        <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+        <div class="bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
           <div>
-            <div class="font-bold text-emerald-400 mono">${o.amount_usdt}</div>
-            <div class="text-[10px] text-slate-400 mono select-all truncate max-w-md">Destino P: ${o.destination_one_time}</div>
+            <div class="font-bold text-[#00A76F] mono text-sm">${o.amount_usdt}</div>
+            <div class="text-[11px] text-[#919EAB] mono select-all truncate max-w-md mt-0.5" title="${o.destination_one_time}">
+              Destino P: ${o.destination_one_time}
+            </div>
           </div>
-          <div class="flex space-x-2">
-            <button onclick="copyToTxForm('${o.destination_one_time}')" class="bg-purple-950 hover:bg-purple-900 text-purple-300 px-2.5 py-1 rounded text-[11px] font-semibold transition">Usar para Transferir</button>
-            <button onclick="copyToWithdrawForm('${o.destination_one_time}')" class="bg-indigo-950 hover:bg-indigo-900 text-indigo-300 px-2.5 py-1 rounded text-[11px] font-semibold transition">Usar para Retirar</button>
+          <div class="flex space-x-2 shrink-0">
+            <button onclick="copyToTxForm('${o.destination_one_time}')" class="bg-[#8E33FF]/15 hover:bg-[#8E33FF]/25 text-[#8E33FF] border border-[#8E33FF]/30 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer">Usar para Transferir</button>
+            <button onclick="copyToWithdrawForm('${o.destination_one_time}')" class="bg-[#00B8D9]/15 hover:bg-[#00B8D9]/25 text-[#00B8D9] border border-[#00B8D9]/30 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer">Usar para Retirar</button>
           </div>
         </div>
       `).join("");
     }
 
-    showToast("Escaneo completado: " + data.total_balance_usdt + " detectados");
+    showToast("Escaneo completado: " + data.total_balance_usdt + " detectados", "success");
   } catch (err) {
     showToast(err.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<svg class="w-4 h-4 text-[#161C24]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg> <span>Escanear Fondos en Blockchain</span>`;
   }
 }
 
@@ -245,7 +373,7 @@ function copyToTxForm(pubkey) {
     document.getElementById("tx-view-priv").value = currentActiveWallet.view_private_key;
   }
   switchTab("tab-transfer");
-  showToast("UTXO asignado a formulario de transferencia");
+  showToast("UTXO asignado al formulario de transferencia RingCT", "info");
 }
 
 function copyToWithdrawForm(pubkey) {
@@ -255,25 +383,38 @@ function copyToWithdrawForm(pubkey) {
     document.getElementById("withdraw-view-priv").value = currentActiveWallet.view_private_key;
   }
   switchTab("tab-vault");
-  showToast("UTXO asignado a formulario de retiro");
+  showToast("UTXO asignado al formulario de retiro con mezclador", "info");
 }
 
-// Execute Shielded Transfer
+// Execute Shielded Transfer (RingCT)
 async function executeTransfer() {
   const btn = document.getElementById("btn-transfer");
-  const spendPriv = document.getElementById("tx-spend-priv").value.trim();
-  const viewPriv = document.getElementById("tx-view-priv").value.trim();
-  const inputPub = document.getElementById("tx-input-pub").value.trim();
-  const recipient = document.getElementById("tx-recipient").value.trim();
-  const amount = parseFloat(document.getElementById("tx-amount").value);
+  const spendPrivInput = document.getElementById("tx-spend-priv");
+  const viewPrivInput = document.getElementById("tx-view-priv");
+  const inputPubInput = document.getElementById("tx-input-pub");
+  const recipientInput = document.getElementById("tx-recipient");
+  const amountInput = document.getElementById("tx-amount");
 
-  if (!spendPriv || !viewPriv || !inputPub || !recipient || !amount) {
-    showToast("Completa todos los campos de la transferencia", "error");
+  const spendPriv = spendPrivInput.value.trim();
+  const viewPriv = viewPrivInput.value.trim();
+  const inputPub = inputPubInput.value.trim();
+  const recipient = recipientInput.value.trim();
+  const amount = parseFloat(amountInput.value);
+
+  let hasError = false;
+  if (!spendPriv) { setInputError(spendPrivInput, true); hasError = true; }
+  if (!viewPriv) { setInputError(viewPrivInput, true); hasError = true; }
+  if (!inputPub) { setInputError(inputPubInput, true); hasError = true; }
+  if (!recipient) { setInputError(recipientInput, true); hasError = true; }
+  if (!amount || amount <= 0) { setInputError(amountInput, true); hasError = true; }
+
+  if (hasError) {
+    showToast("Completa todos los campos obligatorios de la transferencia", "error");
     return;
   }
 
   btn.disabled = true;
-  btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Generando Anillo y Minando...`;
+  btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Generando MLSAG y Minando...`;
 
   try {
     const res = await fetch("/api/v1/tx/transfer", {
@@ -303,21 +444,34 @@ async function executeTransfer() {
     showToast(err.message, "error");
   } finally {
     btn.disabled = false;
-    btn.innerHTML = "<span>Firmar con Anillo (MLSAG) y Enviar</span>";
+    btn.innerHTML = `<svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg> <span>Firmar con Anillo (MLSAG) y Enviar</span>`;
   }
 }
 
-// Execute Withdrawal
+// Execute Withdrawal with Tumbler
 async function executeWithdrawal() {
   const btn = document.getElementById("btn-withdraw");
-  const spendPriv = document.getElementById("withdraw-spend-priv").value.trim();
-  const viewPriv = document.getElementById("withdraw-view-priv").value.trim();
-  const inputPub = document.getElementById("withdraw-input-pub").value.trim();
-  const amount = parseFloat(document.getElementById("withdraw-amount").value);
-  const dest = document.getElementById("withdraw-dest").value.trim();
+  const spendPrivInput = document.getElementById("withdraw-spend-priv");
+  const viewPrivInput = document.getElementById("withdraw-view-priv");
+  const inputPubInput = document.getElementById("withdraw-input-pub");
+  const amountInput = document.getElementById("withdraw-amount");
+  const destInput = document.getElementById("withdraw-dest");
 
-  if (!spendPriv || !viewPriv || !inputPub || !amount || !dest) {
-    showToast("Completa todos los campos para el retiro", "error");
+  const spendPriv = spendPrivInput.value.trim();
+  const viewPriv = viewPrivInput.value.trim();
+  const inputPub = inputPubInput.value.trim();
+  const amount = parseFloat(amountInput.value);
+  const dest = destInput.value.trim();
+
+  let hasError = false;
+  if (!spendPriv) { setInputError(spendPrivInput, true); hasError = true; }
+  if (!viewPriv) { setInputError(viewPrivInput, true); hasError = true; }
+  if (!inputPub) { setInputError(inputPubInput, true); hasError = true; }
+  if (!amount || amount <= 0) { setInputError(amountInput, true); hasError = true; }
+  if (!dest) { setInputError(destInput, true); hasError = true; }
+
+  if (hasError) {
+    showToast("Completa todos los campos obligatorios para el retiro", "error");
     return;
   }
 
@@ -348,7 +502,7 @@ async function executeWithdrawal() {
     showToast(err.message, "error");
   } finally {
     btn.disabled = false;
-    btn.innerHTML = "<span>Ejecutar Retiro y Mezclador</span>";
+    btn.innerHTML = `<svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg> <span>Ejecutar Retiro y Mezclador</span>`;
   }
 }
 
@@ -366,14 +520,14 @@ function renderTumblerRoutes(plan) {
 
   const container = document.getElementById("tumb-routes-container");
   container.innerHTML = plan.routes.map(r => `
-    <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl space-y-2">
+    <div class="bg-[#161C24] border border-[rgba(145,158,171,0.16)] p-4 rounded-xl space-y-2">
       <div class="flex items-center justify-between text-xs">
-        <span class="font-bold text-white">Fragmento #${r.fragment_index}</span>
-        <span class="mono text-emerald-400 font-bold">${r.net_amount_usdt}</span>
+        <span class="font-bold text-[#F9FAFB]">Fragmento #${r.fragment_index}</span>
+        <span class="mono text-[#00A76F] font-bold">${r.net_amount_usdt}</span>
       </div>
-      <div class="text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-900 pt-1.5">
+      <div class="text-[11px] text-[#919EAB] flex items-center justify-between border-t border-[rgba(145,158,171,0.12)] pt-2">
         <span>Ruta de saltos:</span>
-        <span class="text-indigo-400 font-semibold">${r.hops_count} saltos efímeros programados</span>
+        <span class="text-[#8E33FF] font-semibold">${r.hops_count} saltos efímeros programados</span>
       </div>
     </div>
   `).join("");
@@ -388,13 +542,17 @@ async function executeClaimFees() {
   const amount = parseFloat(amountInput.value);
   const dest = addrInput.value.trim();
 
-  if (!amount || amount <= 0 || !dest) {
+  let hasError = false;
+  if (!amount || amount <= 0) { setInputError(amountInput, true); hasError = true; }
+  if (!dest) { setInputError(addrInput, true); hasError = true; }
+
+  if (hasError) {
     showToast("Ingresa un monto válido y la dirección de tesorería 0x...", "error");
     return;
   }
 
   btn.disabled = true;
-  btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-slate-950 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Procesando Retiro de Tesorería...`;
+  btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-[#161C24] inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Procesando Retiro...`;
 
   try {
     const res = await fetch("/api/v1/vault/claim-fees", {
@@ -415,7 +573,7 @@ async function executeClaimFees() {
     showToast(err.message, "error");
   } finally {
     btn.disabled = false;
-    btn.innerHTML = "<span>Transferir Ganancias a Tesorería</span>";
+    btn.innerHTML = `<svg class="w-4 h-4 text-[#161C24]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"></path></svg> <span>Transferir Ganancias a Tesorería</span>`;
   }
 }
 
@@ -449,7 +607,7 @@ let web3UserAddress = null;
 // Connect MetaMask
 async function connectMetaMask() {
   if (typeof window.ethereum === "undefined") {
-    showToast("MetaMask no detectado. Instala MetaMask para interactuar.", "error");
+    showToast("MetaMask no detectado. Instala MetaMask para interactuar en Arbitrum Sepolia.", "error");
     window.open("https://metamask.io/download/", "_blank");
     return;
   }
@@ -472,7 +630,7 @@ async function connectMetaMask() {
     }
 
     await updateWeb3UI();
-    showToast("MetaMask conectado a Arbitrum Sepolia", "success");
+    showToast("MetaMask conectado exitosamente a Arbitrum Sepolia", "success");
   } catch (err) {
     console.error("Error conectando MetaMask:", err);
     showToast(err.message || "Error al conectar MetaMask", "error");
@@ -513,8 +671,7 @@ async function updateWeb3UI() {
   const statusText = document.getElementById("metamask-status-text");
   if (statusBtn && statusText) {
     statusText.textContent = shortAddr;
-    statusBtn.classList.remove("border-amber-500/40", "text-amber-300");
-    statusBtn.classList.add("border-emerald-500/50", "text-emerald-300", "bg-emerald-950/40");
+    statusBtn.className = "flex items-center space-x-2 bg-[#00A76F]/10 hover:bg-[#00A76F]/20 border border-[#00A76F]/40 px-4 py-2 rounded-xl text-xs font-semibold text-[#00A76F] transition shadow-card cursor-pointer font-mono";
   }
 
   try {
@@ -573,10 +730,13 @@ async function executeMetaMaskDeposit() {
     if (!web3Signer) return;
   }
 
-  const grossVal = parseFloat(document.getElementById("deposit-amount").value);
-  let recipient = document.getElementById("deposit-recipient").value.trim();
+  const amountInput = document.getElementById("deposit-amount");
+  const recipInput = document.getElementById("deposit-recipient");
+  const grossVal = parseFloat(amountInput.value);
+  let recipient = recipInput.value.trim();
 
   if (!grossVal || grossVal <= 0) {
+    setInputError(amountInput, true);
     showToast("Ingresa un monto válido en USDT a depositar", "error");
     return;
   }
@@ -584,10 +744,11 @@ async function executeMetaMaskDeposit() {
   // If no stealth recipient provided, generate one automatically
   if (!recipient) {
     await generateAndUseNewStealthAddress();
-    recipient = document.getElementById("deposit-recipient").value.trim();
+    recipient = recipInput.value.trim();
   }
 
   if (!recipient.startsWith("STX") || recipient.length !== 131) {
+    setInputError(recipInput, true);
     showToast("La dirección furtiva debe ser una clave DKSAP válida (STX... de 131 caracteres)", "error");
     return;
   }
@@ -604,23 +765,23 @@ async function executeMetaMaskDeposit() {
     const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS, ERC20_ABI, web3Signer);
 
     // Step 1: Check allowance
-    btn.innerHTML = `<span class="animate-spin inline-block mr-2">🔄</span> 1/2: Verificando / Aprobando USDT...`;
+    btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 1/2: Verificando / Aprobando USDT...`;
     const currentAllowance = await usdtContract.allowance(web3UserAddress, VAULT_CONTRACT_ADDRESS);
 
     if (currentAllowance < depositAmountUnits) {
-      showToast("Confirma la aprobación de USDT en MetaMask...", "success");
+      showToast("Confirma la aprobación de USDT en MetaMask...", "info");
       const approveOverrides = await getArbitrumTxOverrides(web3Provider);
       const approveTx = await usdtContract.approve(VAULT_CONTRACT_ADDRESS, depositAmountUnits, {
         ...approveOverrides,
         gasLimit: 120000n
       });
-      btn.innerHTML = `<span class="animate-spin inline-block mr-2">⏳</span> Esperando confirmación de aprobación en Arbitrum...`;
+      btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Esperando confirmación de aprobación en Arbitrum...`;
       await approveTx.wait();
       showToast("¡USDT Aprobado con éxito! Ahora confirma el depósito...", "success");
     }
 
     // Step 2: Execute deposit
-    btn.innerHTML = `<span class="animate-spin inline-block mr-2">🚀</span> 2/2: Confirmando depósito en CryptoPegVault...`;
+    btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 2/2: Confirmando depósito en CryptoPegVault...`;
     const vaultContract = new ethers.Contract(VAULT_CONTRACT_ADDRESS, VAULT_ABI, web3Signer);
     
     const depOverrides = await getArbitrumTxOverrides(web3Provider);
@@ -637,8 +798,8 @@ async function executeMetaMaskDeposit() {
       gasLimit
     });
 
-    btn.innerHTML = `<span class="animate-spin inline-block mr-2">⛓️</span> Minando bloque en Arbitrum Sepolia...`;
-    showToast(`Tx enviada: ${depositTx.hash.slice(0, 14)}...`, "success");
+    btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Minando bloque en Arbitrum Sepolia...`;
+    showToast(`Tx enviada: ${depositTx.hash.slice(0, 14)}...`, "info");
 
     const receipt = await depositTx.wait();
     btn.disabled = false;
@@ -688,4 +849,3 @@ if (typeof window !== "undefined" && window.ethereum) {
 
   window.ethereum.on("chainChanged", () => location.reload());
 }
-
