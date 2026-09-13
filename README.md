@@ -106,7 +106,7 @@ Los contratos inteligentes se encuentran desplegados, verificados y operando en 
 | Contrato | Dirección en Arbitrum Sepolia | Explorador Arbiscan |
 | :--- | :--- | :--- |
 | **MockUSDT** (Tether USD 6 decimales) | `0x900A96C51aac4EB8aF5FDa39bc0Ef13ADBe88B44` | [Ver en Arbiscan](https://sepolia.arbiscan.io/address/0x900A96C51aac4EB8aF5FDa39bc0Ef13ADBe88B44) |
-| **CryptoPegVault** (Custodia Colateral 1:1) | `0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0` | [Ver en Arbiscan](https://sepolia.arbiscan.io/address/0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0) |
+| **CryptoPegVaultV2** (Custodia Colateral 1:1) | `0x511A31987EF1019a41CBba658935515Dd64d2D18` | [Ver en Arbiscan](https://sepolia.arbiscan.io/address/0x511A31987EF1019a41CBba658935515Dd64d2D18) |
 
 * **Dueño y Validador Autorizado:** `0x9d59867EfE155406f637F028997866f252dcc72c`
 * **Comisión Depósito:** `0.50%` (50 bps)
@@ -161,7 +161,7 @@ Para interactuar con el ecosistema de pruebas desde tu navegador:
 
 ### 2. Flujo Automatizado de Depósito con Oráculo
 Cuando un usuario transfiere colateral a la bóveda en Arbitrum:
-1. El usuario aprueba (`approve`) USDT y ejecuta `deposit(amount, stealthViewPub, stealthSpendPub)` en el contrato `CryptoPegVault` (`0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0`).
+1. El usuario aprueba (`approve`) USDT y ejecuta `deposit(amount, stealthViewPub, stealthSpendPub)` en el contrato `CryptoPegVaultV2` (`0x511A31987EF1019a41CBba658935515Dd64d2D18`).
 2. El contrato transfiere el colateral a custodia, deduce la comisión del protocolo (0.50%) hacia la tesorería y emite el evento on-chain `DepositInitiated`.
 3. El contenedor Docker con `ENABLE_ORACLE=true` detecta automáticamente el evento en segundos a través de `oracle_listener.js`.
 4. El oráculo envía una solicitud interna al daemon local (`POST /api/v1/vault/deposit`).
@@ -178,7 +178,7 @@ Cuando un usuario transfiere colateral a la bóveda en Arbitrum:
 | `NODE_PORT` | Puerto HTTP del daemon y la red P2P. | `8080` |
 | `ENABLE_ORACLE` | Activa el listener on-chain de Arbitrum L2 (`true` o `false`). | `false` |
 | `ORACLE_POLL_INTERVAL_MS` | Frecuencia de sondeo de eventos en Arbitrum (milisegundos). | `5000` |
-| `USDT_VAULT_ADDRESS` | Dirección del Smart Contract `CryptoPegVault` en Arbitrum. | `0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0` |
+| `USDT_VAULT_ADDRESS` | Dirección del Smart Contract `CryptoPegVaultV2` en Arbitrum. | `0x511A31987EF1019a41CBba658935515Dd64d2D18` |
 | `ARBITRUM_USDT_ADDRESS` | Dirección del token USDT oficial en Arbitrum. | `0x900A96C51aac4EB8aF5FDa39bc0Ef13ADBe88B44` |
 | `ARBITRUM_SEPOLIA_RPC_URL` | Endpoint RPC para consultar la red Arbitrum Sepolia. | `https://sepolia-rollup.arbitrum.io/rpc` |
 | `TREASURY_WALLET_ADDRESS` | Dirección `0x...` del administrador para recibir comisiones. | `0x9d59867EfE155406f637F028997866f252dcc72c` |
