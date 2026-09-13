@@ -76,6 +76,13 @@ public:
     bool is_deposit_tx_processed(const std::string& tx_hash) const { return db_.is_deposit_tx_processed(tx_hash); }
     const BlockchainDB& get_db() const { return db_; }
 
+    // Gestión de identidad de validador y oráculos autorizados (P0-03)
+    void set_validator_key(const uint8_t* secret_key_64, const Key256& pub_key_32);
+    void add_authorized_validator(const Key256& pub_key_32);
+    const Key256& get_validator_pubkey() const { return validator_pubkey_; }
+    bool has_validator_key() const { return has_validator_key_; }
+    const std::vector<Key256>& get_authorized_validators() const { return authorized_validators_; }
+
     const Vault& get_vault() const { return vault_; }
     const std::vector<OneTimeOutput>& get_utxo_pool() const { return utxo_pool_; }
     const std::vector<ShieldedTransaction>& get_tx_history() const { return tx_history_; }
@@ -91,6 +98,12 @@ private:
     std::vector<OneTimeOutput> utxo_pool_; // Todas las salidas en cadena (para decoys)
     std::vector<ShieldedTransaction> tx_history_;
     BlockCallback on_block_mined_;
+
+    // Claves y autorización de validador/oráculo (P0-03)
+    Key256 validator_pubkey_{};
+    std::array<uint8_t, 64> validator_secret_key_{};
+    bool has_validator_key_{false};
+    std::vector<Key256> authorized_validators_;
 
     // Seleccionar N-1 señuelos aleatorios del conjunto de outputs con homogeneidad de denominación (AUD-H0-P0-02)
     std::vector<Key256> select_decoys(size_t ring_size, const Key256& real_pubkey, Amount target_amount = 0);

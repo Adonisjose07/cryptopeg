@@ -21,6 +21,18 @@ constexpr Amount USDT_UNIT = 1'000'000ULL;
 using Key256 = std::array<uint8_t, 32>;
 using Hash256 = std::array<uint8_t, 32>;
 using KeyImage = std::array<uint8_t, 32>;
+using Signature64 = std::array<uint8_t, 64>;
+
+// Adición aritmética segura contra desbordamiento de enteros (AUD-H0-P0-02)
+inline bool safe_add_amount(Amount a, Amount b, Amount& result) {
+#if defined(__GNUC__) || defined(__clang__)
+    return !__builtin_add_overflow(a, b, &result);
+#else
+    if (UINT64_MAX - a < b) return false;
+    result = a + b;
+    return true;
+#endif
+}
 
 // Borrado seguro de memoria RAM para claves privadas
 inline void secure_wipe(void* ptr, size_t len) {

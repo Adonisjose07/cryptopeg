@@ -119,8 +119,20 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
+    // Configuración de comisiones desde entorno (P1)
+    uint32_t deposit_fee_bps = 50;
+    const char* env_dep_fee = std::getenv("DEPOSIT_FEE_BPS");
+    if (env_dep_fee) {
+        try { deposit_fee_bps = static_cast<uint32_t>(std::stoul(env_dep_fee)); } catch (...) {}
+    }
+    uint32_t withdraw_fee_bps = 50;
+    const char* env_wdr_fee = std::getenv("WITHDRAW_FEE_BPS");
+    if (env_wdr_fee) {
+        try { withdraw_fee_bps = static_cast<uint32_t>(std::stoul(env_wdr_fee)); } catch (...) {}
+    }
+
     // Inicializar nodo con persistencia LMDB
-    crypto::Node node(50, 50, db_dir);
+    crypto::Node node(deposit_fee_bps, withdraw_fee_bps, db_dir);
     node.print_status();
 
     // Inicializar servicio de red P2P

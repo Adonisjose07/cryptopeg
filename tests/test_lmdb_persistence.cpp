@@ -5,6 +5,7 @@
 #include <iostream>
 #include <cassert>
 #include <filesystem>
+#include <limits>
 
 void cleanup_test_dir(const std::string& path) {
     std::error_code ec;
@@ -212,6 +213,116 @@ int main() {
         assert(found_carol);
         std::cout << "  [OK] Carol detectó sus 150 USDT transferidos por Bob.\n";
         assert(node2.audit_system());
+
+        // -------------------------------------------------------------
+        // PASO 7 (AUD-H0-P0-01): Test Adversarial contra Salidas Huérfanas de Cambio
+        // -------------------------------------------------------------
+        std::cout << "\n  -> [TEST ADVERSARIAL P0-01] Inyección de salidas de cambio huérfanas en bloque...\n";
+        crypto::Block malicious_change_block;
+        malicious_change_block.header.height = node2.get_blockchain_height() + 1;
+        malicious_change_block.header.prev_block_hash = node2.get_top_block_hash();
+        malicious_change_block.header.timestamp = 1773276000ULL;
+
+        // Inyectar salida de cambio huérfana de 5,000,000 USDT sin ningún retiro que la respalde
+        auto dummy_wallet = crypto::StealthWallet::generate_random();
+        auto orphan_change = crypto::StealthProtocol::create_one_time_output(dummy_wallet.get_public_address(), 5000000 * crypto::USDT_UNIT);
+        malicious_change_block.withdrawal_outputs.push_back(orphan_change);
+        malicious_change_block.header.merkle_root = malicious_change_block.compute_merkle_root();
+
+        std::string err_p0_01;
+        bool accepted_orphan = node2.apply_remote_block(malicious_change_block, err_p0_01);
+        assert(!accepted_orphan);
+        std::cout << "  [OK] Bloque con salida huérfana de cambio rechazado categóricamente: " << err_p0_01 << "\n";
+
+        // -------------------------------------------------------------
+        // PASO 8 (AUD-H0-P0-02): Test Adversarial contra Desbordamiento Aritmético de Amount
+        // -------------------------------------------------------------
+        std::cout << "\n  -> [TEST ADVERSARIAL P0-02] Inyección de transacción con wrap-around de Amount (UINT64_MAX)...\n";
+        crypto::OneTimeOutput valid_utxo_for_ring = node2.get_utxo_pool().front();
+        crypto::ShieldedTransaction overflow_tx;
+        overflow_tx.public_fee = 0;
+        crypto::OneTimeOutput of_out1 = crypto::StealthProtocol::create_one_time_output(dummy_wallet.get_public_address(), std::numeric_limits<crypto::Amount>::max() - 100);
+        crypto::OneTimeOutput of_out2 = crypto::StealthProtocol::create_one_time_output(dummy_wallet.get_public_address(), 200);
+        overflow_tx.outputs = {of_out1, of_out2};
+        overflow_tx.ring_sig.ring_pubkeys = {valid_utxo_for_ring.destination_one_time};
+        overflow_tx.ring_sig.key_image = dummy_wallet.spend_public_key;
+
+        bool overflow_caught = false;
+        try {
+            node2.submit_pre_signed_transaction(overflow_tx);
+        } catch (const std::exception& ex) {
+            overflow_caught = true;
+            std::string msg = ex.what();
+            assert(msg.find("Amount overflow") != std::string::npos);
+            std::cout << "  [OK] Desbordamiento aritmético capturado y bloqueado en submit: " << msg << "\n";
+        }
+        assert(overflow_caught);
+
+        // Validar también en apply_remote_block
+        crypto::Block overflow_block;
+        overflow_block.header.height = node2.get_blockchain_height() + 1;
+        overflow_block.header.prev_block_hash = node2.get_top_block_hash();
+        overflow_block.header.timestamp = 1773276500ULL;
+        // Hash canónico válido para superar el primer check
+        overflow_tx.tx_hash = crypto::RingSignatureEngine::compute_canonical_tx_hash(
+            overflow_tx.outputs,
+            overflow_tx.public_fee,
+            overflow_tx.ring_sig.ring_pubkeys,
+            overflow_tx.ring_sig.key_image
+        );
+        overflow_block.txs.push_back(overflow_tx);
+        overflow_block.header.merkle_root = overflow_block.compute_merkle_root();
+        std::string err_overflow_block;
+        bool accepted_overflow_block = node2.apply_remote_block(overflow_block, err_overflow_block);
+        assert(!accepted_overflow_block);
+        std::cout << "  [OK] Bloque con transacción desbordada rechazado en apply_remote_block: " << err_overflow_block << "\n";
+
+        // -------------------------------------------------------------
+        // PASO 9 (AUD-H0-P0-03): Test Adversarial contra Depósitos sin Firma de Validador Autorizado
+        // -------------------------------------------------------------
+        std::cout << "\n  -> [TEST ADVERSARIAL P0-03] Inyección de depósito P2P sin firma de validador autorizada...\n";
+        crypto::Block fake_deposit_block;
+        fake_deposit_block.header.height = node2.get_blockchain_height() + 1;
+        fake_deposit_block.header.prev_block_hash = node2.get_top_block_hash();
+        fake_deposit_block.header.timestamp = 1773277000ULL;
+
+        crypto::DepositReceipt fake_dep;
+        fake_dep.gross_usdt_deposited = 1000 * crypto::USDT_UNIT;
+        fake_dep.fee_to_pool = 5 * crypto::USDT_UNIT;
+        fake_dep.net_shielded_tokens_minted = 995 * crypto::USDT_UNIT;
+        fake_dep.tx_hash = "0xfake_arbitrum_deposit_unbacked_hash";
+        fake_dep.recipient_view_pub = dummy_wallet.view_public_key;
+        fake_dep.recipient_spend_pub = dummy_wallet.spend_public_key;
+
+        crypto::Hash256 dep_seed;
+        crypto_generichash(dep_seed.data(), 32, reinterpret_cast<const uint8_t*>(fake_dep.tx_hash.data()), fake_dep.tx_hash.size(), nullptr, 0);
+        auto fake_out = crypto::StealthProtocol::create_one_time_output(dummy_wallet.get_public_address(), fake_dep.net_shielded_tokens_minted, &dep_seed);
+
+        fake_deposit_block.deposits.push_back(fake_dep);
+        fake_deposit_block.deposit_outputs.push_back(fake_out);
+        fake_deposit_block.header.merkle_root = fake_deposit_block.compute_merkle_root();
+        // Encabezado no firmado
+        fake_deposit_block.header.validator_pubkey.fill(0);
+        fake_deposit_block.header.validator_signature.fill(0);
+
+        std::string err_p0_03;
+        bool accepted_fake_dep = node2.apply_remote_block(fake_deposit_block, err_p0_03);
+        assert(!accepted_fake_dep);
+        std::cout << "  [OK] Depósito P2P no autenticado rechazado categóricamente: " << err_p0_03 << "\n";
+
+        // Configuramos lista blanca de validadores autorizados en node2
+        node2.add_authorized_validator(node2.get_validator_pubkey());
+
+        // Ahora firmamos con un validador no autorizado
+        crypto::Key256 evil_pk;
+        std::array<uint8_t, 64> evil_sk;
+        crypto_sign_keypair(evil_pk.data(), evil_sk.data());
+        fake_deposit_block.header.sign(evil_sk.data(), evil_pk);
+
+        std::string err_unauth;
+        bool accepted_unauth = node2.apply_remote_block(fake_deposit_block, err_unauth);
+        assert(!accepted_unauth);
+        std::cout << "  [OK] Depósito P2P firmado por validador no autorizado rechazado: " << err_unauth << "\n";
     }
 
     cleanup_test_dir(test_db_path);

@@ -184,6 +184,8 @@ void serialize_header(ByteWriter& w, const BlockHeader& h) {
     w.write_array(h.merkle_root);
     w.write_u64(h.timestamp);
     w.write_u64(h.nonce);
+    w.write_array(h.validator_pubkey);
+    w.write_array(h.validator_signature);
 }
 
 BlockHeader deserialize_header(ByteReader& r) {
@@ -193,7 +195,52 @@ BlockHeader deserialize_header(ByteReader& r) {
     h.merkle_root = r.read_array<32>();
     h.timestamp = r.read_u64();
     h.nonce = r.read_u64();
+    if (r.remaining() >= 96) {
+        h.validator_pubkey = r.read_array<32>();
+        h.validator_signature = r.read_array<64>();
+    } else {
+        h.validator_pubkey.fill(0);
+        h.validator_signature.fill(0);
+    }
     return h;
+}
+
+Hash256 BlockHeader::signing_hash() const {
+    ByteWriter w;
+    w.write_u64(height);
+    w.write_array(prev_block_hash);
+    w.write_array(merkle_root);
+    w.write_u64(timestamp);
+    w.write_u64(nonce);
+    w.write_array(validator_pubkey);
+    Hash256 h;
+    crypto_generichash(h.data(), 32, w.get_bytes().data(), w.get_bytes().size(), nullptr, 0);
+    return h;
+}
+
+void BlockHeader::sign(const uint8_t* secret_key_64, const Key256& pub_key_32) {
+    validator_pubkey = pub_key_32;
+    Hash256 sh = signing_hash();
+    crypto_sign_detached(
+        validator_signature.data(), nullptr,
+        sh.data(), 32,
+        secret_key_64
+    );
+}
+
+bool BlockHeader::verify_signature() const {
+    bool is_zero = true;
+    for (uint8_t b : validator_pubkey) {
+        if (b != 0) { is_zero = false; break; }
+    }
+    if (is_zero) return false;
+
+    Hash256 sh = signing_hash();
+    return (crypto_sign_verify_detached(
+        validator_signature.data(),
+        sh.data(), 32,
+        validator_pubkey.data()
+    ) == 0);
 }
 
 Hash256 BlockHeader::hash() const {

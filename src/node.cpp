@@ -15,7 +15,66 @@ Node::Node(uint32_t deposit_fee_bps, uint32_t withdraw_fee_bps, const std::strin
     if (sodium_init() < 0) {
         throw std::runtime_error("Fallo al inicializar libsodium.");
     }
+
+    // Inicializar clave de validador local (P0-03)
+    const char* env_val_priv = std::getenv("VALIDATOR_PRIVATE_KEY");
+    if (env_val_priv) {
+        try {
+            auto priv_bytes = from_hex(env_val_priv);
+            if (priv_bytes.size() == 32) {
+                crypto_sign_seed_keypair(
+                    validator_pubkey_.data(),
+                    validator_secret_key_.data(),
+                    priv_bytes.data()
+                );
+                has_validator_key_ = true;
+            } else if (priv_bytes.size() == 64) {
+                std::memcpy(validator_secret_key_.data(), priv_bytes.data(), 64);
+                std::memcpy(validator_pubkey_.data(), priv_bytes.data() + 32, 32);
+                has_validator_key_ = true;
+            }
+        } catch (...) {}
+    }
+    if (!has_validator_key_) {
+        crypto_sign_keypair(validator_pubkey_.data(), validator_secret_key_.data());
+        has_validator_key_ = true;
+    }
+
+    // Cargar validadores autorizados desde entorno si están configurados
+    const char* env_auth = std::getenv("AUTHORIZED_VALIDATOR_KEYS");
+    if (env_auth) {
+        std::istringstream iss(env_auth);
+        std::string pk_hex;
+        while (std::getline(iss, pk_hex, ',')) {
+            if (!pk_hex.empty()) {
+                try {
+                    auto b = from_hex(pk_hex);
+                    if (b.size() == 32) {
+                        Key256 k;
+                        std::memcpy(k.data(), b.data(), 32);
+                        authorized_validators_.push_back(k);
+                    }
+                } catch (...) {}
+            }
+        }
+    }
+
     init_or_recover_database();
+}
+
+void Node::set_validator_key(const uint8_t* secret_key_64, const Key256& pub_key_32) {
+    std::lock_guard<std::mutex> lock(node_mutex_);
+    std::memcpy(validator_secret_key_.data(), secret_key_64, 64);
+    validator_pubkey_ = pub_key_32;
+    has_validator_key_ = true;
+}
+
+void Node::add_authorized_validator(const Key256& pub_key_32) {
+    std::lock_guard<std::mutex> lock(node_mutex_);
+    for (const auto& k : authorized_validators_) {
+        if (sodium_memcmp(k.data(), pub_key_32.data(), 32) == 0) return;
+    }
+    authorized_validators_.push_back(pub_key_32);
 }
 
 void Node::init_or_recover_database() {
@@ -98,6 +157,10 @@ DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recip
     block.deposit_outputs.push_back(utxo);
     block.header.merkle_root = block.compute_merkle_root();
 
+    if (has_validator_key_) {
+        block.header.sign(validator_secret_key_.data(), validator_pubkey_);
+    }
+
     db_.commit_block(block, vault_, {utxo}, {});
 
     if (on_block_mined_) {
@@ -161,7 +224,11 @@ ShieldedTransaction Node::transfer_shielded(
         throw std::runtime_error("El emisor no es el propietario del output seleccionado.");
     }
 
-    if (input_utxo.amount < (send_amount + tx_fee)) {
+    Amount total_needed = 0;
+    if (!safe_add_amount(send_amount, tx_fee, total_needed)) {
+        throw std::runtime_error("Desbordamiento aritmético en monto a transferir más comisión (P0-02).");
+    }
+    if (input_utxo.amount < total_needed) {
         throw std::runtime_error("Fondos insuficientes en el output para cubrir monto + comisión.");
     }
 
@@ -249,6 +316,10 @@ ShieldedTransaction Node::transfer_shielded(
     );
     block.txs.push_back(tx);
     block.header.merkle_root = block.compute_merkle_root();
+
+    if (has_validator_key_) {
+        block.header.sign(validator_secret_key_.data(), validator_pubkey_);
+    }
 
     db_.commit_block(block, vault_, new_outputs, {sig.key_image});
 
@@ -339,6 +410,10 @@ TumblingPlan Node::withdraw_shielded(
     }
     block.header.merkle_root = block.compute_merkle_root();
 
+    if (has_validator_key_) {
+        block.header.sign(validator_secret_key_.data(), validator_pubkey_);
+    }
+
     db_.commit_block(block, vault_, new_outs, {img});
 
     if (on_block_mined_) {
@@ -423,6 +498,27 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
     if (std::memcmp(block.header.merkle_root.data(), calculated_root.data(), 32) != 0) {
         error_msg = "Raiz de Merkle invalida en cabecera del bloque.";
         return false;
+    }
+
+    // 0. Autenticación de depósitos y consenso federado P2P (AUD-H0-P0-03)
+    if (!block.deposits.empty() || !authorized_validators_.empty()) {
+        if (!block.header.verify_signature()) {
+            error_msg = "Bloque remoto rechazado: firma de validador/oráculo inválida o ausente en el encabezado (P0-03).";
+            return false;
+        }
+        if (!authorized_validators_.empty()) {
+            bool authorized = false;
+            for (const auto& auth_pk : authorized_validators_) {
+                if (sodium_memcmp(auth_pk.data(), block.header.validator_pubkey.data(), 32) == 0) {
+                    authorized = true;
+                    break;
+                }
+            }
+            if (!authorized) {
+                error_msg = "Bloque remoto rechazado: la clave del validador firmante no está en el conjunto autorizado de oráculos (P0-03).";
+                return false;
+            }
+        }
     }
 
     Vault temp_vault(vault_.get_deposit_fee_bps(), vault_.get_withdraw_fee_bps());
@@ -634,7 +730,10 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
                 error_msg = "Monto de salida en transaccion debe ser mayor a cero.";
                 return false;
             }
-            tx_total_spent += out.amount;
+            if (!safe_add_amount(tx_total_spent, out.amount, tx_total_spent)) {
+                error_msg = "Transaccion rechazada: desbordamiento aritmetico en la suma de salidas (Amount overflow P0-02).";
+                return false;
+            }
         }
 
         Amount ring_denomination = 0;
@@ -672,6 +771,21 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
     }
 
     // 3. Validar retiros (Hito 0: AUD-H0-P0-01 Prueba Criptográfica de Quema)
+    for (const auto& co : block.withdrawal_outputs) {
+        if (co.amount == 0) {
+            error_msg = "Salida de cambio en retiro con monto cero.";
+            return false;
+        }
+        if (crypto_core_ed25519_is_valid_point(co.destination_one_time.data()) == 0 ||
+            crypto_core_ed25519_is_valid_point(co.ephemeral_public_key.data()) == 0) {
+            error_msg = "Punto geométrico inválido en salida de cambio de retiro.";
+            return false;
+        }
+    }
+
+    std::vector<bool> output_claimed(block.withdrawal_outputs.size(), false);
+    size_t expected_change_count = 0;
+
     for (const auto& wdr : block.withdrawals) {
         if (wdr.gross_tokens_burned == 0) {
             error_msg = "Retiro rechazado: monto quemado debe ser mayor a cero.";
@@ -711,18 +825,20 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             return false;
         }
 
-        // 3.3b Si hay cambio, verificar que exista la salida de cambio correspondiente en el bloque (AUD-H0-04)
+        // 3.3b Si hay cambio, verificar correspondencia biyectiva 1:1 estricta con block.withdrawal_outputs (AUD-H0-04, P0-01)
         Amount expected_change = utxo_amount - wdr.gross_tokens_burned;
         if (expected_change > 0) {
+            expected_change_count++;
             bool change_found = false;
-            for (const auto& co : block.withdrawal_outputs) {
-                if (co.amount == expected_change) {
+            for (size_t oi = 0; oi < block.withdrawal_outputs.size(); ++oi) {
+                if (!output_claimed[oi] && block.withdrawal_outputs[oi].amount == expected_change) {
+                    output_claimed[oi] = true;
                     change_found = true;
                     break;
                 }
             }
             if (!change_found) {
-                error_msg = "Retiro rechazado: falta salida de cambio en el bloque correspondiente al UTXO quemado.";
+                error_msg = "Retiro rechazado: falta salida de cambio o monto discordante en el bloque.";
                 return false;
             }
         }
@@ -763,6 +879,14 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             error_msg = "Retiro invalido en boveda: " + std::string(e.what());
             return false;
         }
+    }
+
+    // 3.6 Rechazar terminantemente cualquier salida de cambio huérfana o no respaldada (P0-01)
+    if (block.withdrawal_outputs.size() != expected_change_count) {
+        error_msg = "Bloque rechazado: salidas de cambio huérfanas o no respaldadas detectadas (P0-01). Se esperaban " +
+                    std::to_string(expected_change_count) + " salidas, pero el bloque contiene " +
+                    std::to_string(block.withdrawal_outputs.size());
+        return false;
     }
 
     // 4. Incorporar salidas de depósitos y de cambio de retiros (AUD-H0-04)
@@ -871,7 +995,9 @@ ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransactio
         if (out.amount == 0) {
             throw std::runtime_error("Salida de transaccion invalida: monto debe ser mayor a cero.");
         }
-        total_spent += out.amount;
+        if (!safe_add_amount(total_spent, out.amount, total_spent)) {
+            throw std::runtime_error("Violacion de conservacion de balance: desbordamiento aritmetico en salidas (Amount overflow P0-02).");
+        }
     }
 
     if (!denomination_set || total_spent > ring_denomination) {
@@ -919,6 +1045,10 @@ ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransactio
     );
     block.txs.push_back(tx);
     block.header.merkle_root = block.compute_merkle_root();
+
+    if (has_validator_key_) {
+        block.header.sign(validator_secret_key_.data(), validator_pubkey_);
+    }
 
     db_.commit_block(block, vault_, tx.outputs, {tx.ring_sig.key_image});
 

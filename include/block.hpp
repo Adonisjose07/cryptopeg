@@ -40,8 +40,13 @@ struct BlockHeader {
     Hash256 merkle_root{};
     uint64_t timestamp{0};
     uint64_t nonce{0};
+    Key256 validator_pubkey{};
+    Signature64 validator_signature{};
 
     Hash256 hash() const;
+    Hash256 signing_hash() const;
+    void sign(const uint8_t* secret_key_64, const Key256& pub_key_32);
+    bool verify_signature() const;
 };
 
 void serialize_header(ByteWriter& w, const BlockHeader& h);

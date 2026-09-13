@@ -2,6 +2,7 @@
 #include "ring_signature.hpp"
 #include "pedersen.hpp"
 #include "types.hpp"
+#include "block.hpp"
 #include <cassert>
 #include <iostream>
 #include <cstring>
@@ -331,6 +332,89 @@ int main() {
         for (auto b : secret_key) { if (b != 0) all_zero = false; }
         CHECK(all_zero, "secure_wipe debe poner a cero el 100% de los bytes");
         std::cout << "  [OK] secure_wipe borra memoria en tiempo constante sin optimizaciones del compilador.\n";
+    }
+
+    // -------------------------------------------------------------
+    // TEST 7: Aritmética Segura contra Desbordamiento de Enteros (P0-02)
+    // -------------------------------------------------------------
+    std::cout << "\n[TEST 7] Aritmética Segura contra Desbordamiento de Enteros (safe_add_amount)...\n";
+    {
+        crypto::Amount result = 0;
+        // Suma ordinaria
+        CHECK(crypto::safe_add_amount(100, 200, result) && result == 300, "Suma ordinaria debe ser 300");
+
+        // Suma al límite exacto de uint64_t
+        crypto::Amount max_u64 = std::numeric_limits<crypto::Amount>::max();
+        CHECK(crypto::safe_add_amount(max_u64 - 50, 50, result) && result == max_u64, "Suma al límite debe alcanzar UINT64_MAX");
+
+        // Desbordamiento por 1 unidad
+        bool overflow_by_one = crypto::safe_add_amount(max_u64, 1, result);
+        CHECK(!overflow_by_one, "safe_add_amount debe retornar false ante desbordamiento por 1 unidad");
+
+        // Desbordamiento masivo (intento de wrap-around malicioso)
+        bool wrap_around = crypto::safe_add_amount(max_u64 - 10, 50, result);
+        CHECK(!wrap_around, "safe_add_amount debe rechazar wrap-around masivo");
+
+        std::cout << "  [OK] Protección estricta contra overflow de Amount verificada.\n";
+    }
+
+    // -------------------------------------------------------------
+    // TEST 8: Firma y Verificación de Cabecera de Bloque Ed25519 (P0-03)
+    // -------------------------------------------------------------
+    std::cout << "\n[TEST 8] Firma y Verificación Criptográfica de Cabecera de Bloque (BlockHeader)...\n";
+    {
+        crypto::Key256 val_pk;
+        std::array<uint8_t, 64> val_sk;
+        crypto_sign_keypair(val_pk.data(), val_sk.data());
+
+        crypto::BlockHeader header;
+        header.height = 10;
+        header.timestamp = 1773275000ULL;
+        header.nonce = 12345;
+        crypto_generichash(header.prev_block_hash.data(), 32, reinterpret_cast<const uint8_t*>("prev"), 4, nullptr, 0);
+        crypto_generichash(header.merkle_root.data(), 32, reinterpret_cast<const uint8_t*>("root"), 4, nullptr, 0);
+
+        // Cabecera sin firmar debe fallar verificación
+        CHECK(!header.verify_signature(), "Cabecera no firmada debe fallar verify_signature");
+
+        // Firma válida
+        header.sign(val_sk.data(), val_pk);
+        CHECK(header.verify_signature(), "Firma válida de cabecera debe ser verificada exitosamente");
+
+        // Serialización y deserialización de cabecera firmada
+        crypto::ByteWriter bw;
+        crypto::serialize_header(bw, header);
+        auto raw_bytes = bw.take_bytes();
+        crypto::ByteReader br(raw_bytes.data(), raw_bytes.size());
+        auto deserialized_header = crypto::deserialize_header(br);
+        CHECK(deserialized_header.verify_signature(), "Cabecera deserializada debe preservar y verificar firma");
+        CHECK(std::memcmp(deserialized_header.validator_pubkey.data(), val_pk.data(), 32) == 0, "Validator pubkey debe coincidir tras deserialización");
+
+        // Falsificación de altura en cabecera
+        auto tampered_header = header;
+        tampered_header.height = 11;
+        CHECK(!tampered_header.verify_signature(), "Cabecera alterada en altura debe fallar verificación");
+
+        // Falsificación de Merkle root
+        auto tampered_merkle = header;
+        tampered_merkle.merkle_root[0] ^= 0xFF;
+        CHECK(!tampered_merkle.verify_signature(), "Cabecera alterada en Merkle root debe fallar verificación");
+
+        // Falsificación de firma
+        auto tampered_sig = header;
+        tampered_sig.validator_signature[5] ^= 0x55;
+        CHECK(!tampered_sig.verify_signature(), "Firma corrupta debe fallar verificación");
+
+        // Firma de otro validador ilegítimo
+        crypto::Key256 evil_pk;
+        std::array<uint8_t, 64> evil_sk;
+        crypto_sign_keypair(evil_pk.data(), evil_sk.data());
+        auto evil_header = header;
+        evil_header.sign(evil_sk.data(), evil_pk);
+        CHECK(evil_header.verify_signature(), "Firma de evil header es internamente válida");
+        CHECK(std::memcmp(evil_header.validator_pubkey.data(), val_pk.data(), 32) != 0, "Evil pubkey no coincide con validador legítimo");
+
+        std::cout << "  [OK] Autenticación criptográfica de cabecera de bloque Ed25519 verificada al 100%.\n";
     }
 
     std::cout << "\n=================================================================\n";
