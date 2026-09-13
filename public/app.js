@@ -739,7 +739,7 @@ async function executeClaimFees() {
 // =================================================================
 const ARB_SEPOLIA_CHAIN_ID = 421614;
 const ARB_SEPOLIA_HEX = "0x66eee";
-const VAULT_CONTRACT_ADDRESS = "0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0";
+const VAULT_CONTRACT_ADDRESS = "0x511A31987EF1019a41CBba658935515Dd64d2D18";
 const USDT_CONTRACT_ADDRESS = "0x900A96C51aac4EB8aF5FDa39bc0Ef13ADBe88B44";
 
 const ERC20_ABI = [

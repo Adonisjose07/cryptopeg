@@ -203,4 +203,20 @@ contract CryptoPegVaultV2 is Ownable, ReentrancyGuard, Pausable, EIP712 {
     function unpause() external onlyOwner {
         _unpause();
     }
+
+    /**
+     * @notice Consultar colateral total físico en la bóveda.
+     */
+    function getCollateralBalance() external view returns (uint256) {
+        return usdtToken.balanceOf(address(this));
+    }
+
+    /**
+     * @notice Consultar colateral correspondiente a tokens privados de usuarios en circulación.
+     */
+    function getCirculatingBacking() external view returns (uint256) {
+        uint256 total = usdtToken.balanceOf(address(this));
+        if (total <= accumulatedFees) return 0;
+        return total - accumulatedFees;
+    }
 }

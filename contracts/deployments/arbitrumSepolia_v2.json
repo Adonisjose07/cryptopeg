@@ -1,0 +1,12 @@
+{
+  "network": "arbitrumSepolia",
+  "chainId": "421614",
+  "contracts": {
+    "USDT": "0x900A96C51aac4EB8aF5FDa39bc0Ef13ADBe88B44",
+    "CryptoPegVaultV2": "0x511A31987EF1019a41CBba658935515Dd64d2D18"
+  },
+  "validatorSigner": "0x9d59867EfE155406f637F028997866f252dcc72c",
+  "depositFeeBps": 50,
+  "withdrawFeeBps": 50,
+  "deployedAt": "2026-09-13T00:18:46.422Z"
+}

@@ -5,7 +5,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env") });
 
 const ENABLE_ORACLE = (process.env.ENABLE_ORACLE || "false").toLowerCase() === "true";
 const ARBITRUM_RPC_URL = process.env.ARBITRUM_SEPOLIA_RPC_URL || process.env.ARBITRUM_RPC_URL || "https://sepolia-rollup.arbitrum.io/rpc";
-const VAULT_ADDRESS = process.env.USDT_VAULT_ADDRESS || "0x0ddFB2b3095DFC50E15bCD37b6A3a786a4DCB3e0";
+const VAULT_ADDRESS = process.env.USDT_VAULT_ADDRESS || "0x511A31987EF1019a41CBba658935515Dd64d2D18";
 const NODE_DAEMON_URL = process.env.NODE_DAEMON_URL || "http://127.0.0.1:8080";
 const POLL_INTERVAL_MS = parseInt(process.env.ORACLE_POLL_INTERVAL_MS || "5000");
 const STATE_FILE = process.env.RELAYER_STATE_FILE || path.resolve(__dirname, "../../data/relayer_state.json");
