@@ -88,6 +88,9 @@ target_link_libraries(test_mnemonic_wallet PRIVATE crypto_core)
 add_executable(test_p2p_network tests/test_p2p_network.cpp)
 target_link_libraries(test_p2p_network PRIVATE crypto_core)
 
+add_executable(test_crypto_primitives tests/test_crypto_primitives.cpp)
+target_link_libraries(test_crypto_primitives PRIVATE crypto_core)
+
 # Binary output destination
 set_target_properties(
     crypto_node
@@ -99,6 +102,7 @@ set_target_properties(
     test_rpc_api
     test_mnemonic_wallet
     test_p2p_network
+    test_crypto_primitives
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )

@@ -67,6 +67,7 @@ COPY --from=builder /build/build/bin/test_lmdb_persistence /app/test_lmdb_persis
 COPY --from=builder /build/build/bin/test_rpc_api /app/test_rpc_api
 COPY --from=builder /build/build/bin/test_mnemonic_wallet /app/test_mnemonic_wallet
 COPY --from=builder /build/build/bin/test_p2p_network /app/test_p2p_network
+COPY --from=builder /build/build/bin/test_crypto_primitives /app/test_crypto_primitives
 COPY --from=builder /build/public /app/public
 
 # Copy contracts & oracle service

@@ -614,9 +614,10 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             return false;
         }
 
-        // 2.2. Prevención de doble gasto intra-bloque e inter-bloque (AUD-H0-01)
+        // 2.2. Prevención de doble gasto intra-bloque e inter-bloque (AUD-H0-01, AUD-CRIT-01)
+        KeyImage tx_ki_canonical = canonical_key_image(tx.ring_sig.key_image);
         for (const auto& ki : spent_images) {
-            if (sodium_memcmp(ki.data(), tx.ring_sig.key_image.data(), 32) == 0) {
+            if (sodium_memcmp(canonical_key_image(ki).data(), tx_ki_canonical.data(), 32) == 0) {
                 error_msg = "Intento de doble gasto intra-bloque: imagen de clave duplicada en transacciones o retiros del mismo bloque.";
                 return false;
             }
@@ -747,8 +748,9 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             error_msg = "Intento de doble gasto / doble quema en retiro: imagen de clave ya utilizada.";
             return false;
         }
+        KeyImage wdr_ki_canonical = canonical_key_image(wdr.key_image);
         for (const auto& ki : spent_images) {
-            if (sodium_memcmp(ki.data(), wdr.key_image.data(), 32) == 0) {
+            if (sodium_memcmp(canonical_key_image(ki).data(), wdr_ki_canonical.data(), 32) == 0) {
                 error_msg = "Imagen de clave duplicada en transacciones o retiros del mismo bloque.";
                 return false;
             }

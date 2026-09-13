@@ -173,7 +173,14 @@ async function main() {
       const fromBlock = lastCheckedL2Block + 1;
       const toBlock = currentBlock;
 
-      const events = await vaultContractFilter(fromBlock, toBlock);
+      let events;
+      try {
+        events = await vaultContractFilter(fromBlock, toBlock);
+      } catch (filterErr) {
+        console.error(`[ORACLE-INBOUND] Error consultando eventos L2 en rango [${fromBlock}-${toBlock}]:`, filterErr.message);
+        // Salir inmediatamente sin alterar lastCheckedL2Block para no omitir depósitos ante fallas RPC (AUD-HIGH-01)
+        return;
+      }
 
       // Orden canónico determinista estricto (AUD-H0-P1-02)
       // Garantiza que todos los oráculos independientes procesen los eventos en el mismo orden exacto
@@ -189,13 +196,14 @@ async function main() {
         const txHash = event.transactionHash;
         if (processedTxHashes.has(txHash)) continue;
 
+        const grossUnits = Number(event.args.grossAmount);
         const grossUSDT = parseFloat(ethers.formatUnits(event.args.grossAmount, 6));
         const viewKeyHex = event.args.stealthPubView.replace("0x", "");
         const spendKeyHex = event.args.stealthPubSpend.replace("0x", "");
 
         console.log(`\n[ORACLE-INBOUND] -> Nuevo depósito detectado en Arbitrum Sepolia!`);
         console.log(`                 Tx Hash:  ${txHash}`);
-        console.log(`                 Monto:    ${grossUSDT.toFixed(6)} USDT`);
+        console.log(`                 Monto:    ${grossUSDT.toFixed(6)} USDT (${grossUnits} micro-USDT)`);
         console.log(`                 View Key: ${viewKeyHex.substring(0, 16)}...`);
         console.log(`                 Spend Key:${spendKeyHex.substring(0, 16)}...`);
 
@@ -209,6 +217,7 @@ async function main() {
             },
             body: JSON.stringify({
               gross_usdt: grossUSDT,
+              gross_usdt_raw: grossUnits,
               stealth_pub_view: viewKeyHex,
               stealth_pub_spend: spendKeyHex,
               tx_hash: txHash,
@@ -250,11 +259,7 @@ async function main() {
   }
 
   async function vaultContractFilter(fromBlock, toBlock) {
-    try {
-      return await vaultReadOnly.queryFilter("DepositInitiated", fromBlock, toBlock);
-    } catch (e) {
-      return [];
-    }
+    return await vaultReadOnly.queryFilter("DepositInitiated", fromBlock, toBlock);
   }
 
   // 2. Tarea: Sondeo y Relayer de Retiros C++ Daemon -> Arbitrum L2

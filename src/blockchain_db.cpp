@@ -208,9 +208,10 @@ bool BlockchainDB::is_key_image_spent(const KeyImage& image) const {
     int rc = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
     if (rc != 0) return false;
 
+    KeyImage canonical = canonical_key_image(image);
     MDB_val k, v;
-    k.mv_size = image.size();
-    k.mv_data = const_cast<uint8_t*>(image.data());
+    k.mv_size = canonical.size();
+    k.mv_data = const_cast<uint8_t*>(canonical.data());
 
     rc = mdb_get(txn, dbi_key_images_, &k, &v);
     mdb_txn_abort(txn);
@@ -406,11 +407,12 @@ void BlockchainDB::commit_block(
             throw std::runtime_error("Fallo al indexar hash de bloque: " + std::string(mdb_strerror(rc)));
         }
 
-        // 3. Registrar imágenes de clave gastadas
+        // 3. Registrar imágenes de clave gastadas (canónicas en subgrupo primo AUD-CRIT-01)
         for (const auto& ki : spent_images) {
+            KeyImage canonical_ki = canonical_key_image(ki);
             MDB_val k_ki, v_ki_h;
-            k_ki.mv_size = ki.size();
-            k_ki.mv_data = const_cast<uint8_t*>(ki.data());
+            k_ki.mv_size = canonical_ki.size();
+            k_ki.mv_data = const_cast<uint8_t*>(canonical_ki.data());
             v_ki_h.mv_size = sizeof(be_height);
             v_ki_h.mv_data = &be_height;
 

@@ -337,8 +337,15 @@ void RpcServer::setup_routes() {
             }
 
             auto body = json::parse(req.body);
-            double gross_val = body.at("gross_usdt").get<double>();
-            Amount gross = parse_usdt(gross_val);
+            Amount gross = 0;
+            if (body.contains("gross_usdt_raw")) {
+                gross = body.at("gross_usdt_raw").get<Amount>();
+            } else if (body.contains("gross_usdt")) {
+                double gross_val = body.at("gross_usdt").get<double>();
+                gross = parse_usdt(gross_val);
+            } else {
+                throw std::invalid_argument("Se requiere 'gross_usdt' o 'gross_usdt_raw'.");
+            }
             std::string custom_tx = body.value("tx_hash", "");
             uint64_t custom_ts = body.value("timestamp", 0ULL);
 

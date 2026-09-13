@@ -7,6 +7,8 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <cctype>
+#include <cmath>
 #include <sodium.h>
 
 namespace crypto {
@@ -50,11 +52,20 @@ inline std::vector<uint8_t> from_hex(const std::string& hex) {
     if (hex.length() % 2 != 0) {
         throw std::invalid_argument("Cadena hexadecimal con longitud inválida.");
     }
+    for (char c : hex) {
+        if (!std::isxdigit(static_cast<unsigned char>(c))) {
+            throw std::invalid_argument("Carácter hexadecimal inválido.");
+        }
+    }
     std::vector<uint8_t> bytes;
     bytes.reserve(hex.length() / 2);
     for (size_t i = 0; i < hex.length(); i += 2) {
         std::string byteString = hex.substr(i, 2);
-        uint8_t byte = static_cast<uint8_t>(std::stoul(byteString, nullptr, 16));
+        size_t idx = 0;
+        uint8_t byte = static_cast<uint8_t>(std::stoul(byteString, &idx, 16));
+        if (idx != 2) {
+            throw std::invalid_argument("Error parseando byte hexadecimal.");
+        }
         bytes.push_back(byte);
     }
     return bytes;
@@ -70,10 +81,21 @@ inline std::string format_usdt(Amount micro_usdt) {
 }
 
 inline Amount parse_usdt(double usdt) {
-    if (usdt < 0.0) {
-        throw std::invalid_argument("El monto en USDT no puede ser negativo.");
+    if (std::isnan(usdt) || std::isinf(usdt) || usdt < 0.0 || usdt > 1e12) {
+        throw std::invalid_argument("Monto en USDT inválido o fuera de rango (AUD-MED-01).");
     }
     return static_cast<Amount>(usdt * 1'000'000.0 + 0.5);
+}
+
+// Representante canónico en el subgrupo primo multiplicando por el cofactor 8 (AUD-CRIT-01)
+// Se calcula mediante 3 duplicaciones sucesivas de punto en curva (2P, 4P, 8P) con adición completa de Edwards.
+// Garantiza que cualquier punto I y todos sus alias de torsión (I + Tk) colapsen al mismo punto canónico 8*I.
+inline KeyImage canonical_key_image(const KeyImage& image) {
+    KeyImage p2, p4, p8;
+    if (crypto_core_ed25519_add(p2.data(), image.data(), image.data()) != 0) return image;
+    if (crypto_core_ed25519_add(p4.data(), p2.data(), p2.data()) != 0) return image;
+    if (crypto_core_ed25519_add(p8.data(), p4.data(), p4.data()) != 0) return image;
+    return p8;
 }
 
 } // namespace crypto

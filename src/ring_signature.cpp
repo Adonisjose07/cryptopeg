@@ -8,9 +8,17 @@ Key256 RingSignatureEngine::hash_to_point(const Key256& pubkey) {
     Key256 uniform;
     crypto_generichash(uniform.data(), 32, pubkey.data(), 32, nullptr, 0);
 
-    Key256 Hp;
-    if (crypto_core_ed25519_from_uniform(Hp.data(), uniform.data()) != 0) {
+    Key256 p_raw;
+    if (crypto_core_ed25519_from_uniform(p_raw.data(), uniform.data()) != 0) {
         throw std::runtime_error("Fallo al mapear clave pública a punto en la curva.");
+    }
+
+    // Limpiar cofactor 8 multiplicando por 8 para garantizar que Hp resida estrictamente en el subgrupo de orden primo L (AUD-CRIT-01)
+    static const unsigned char eight_scalar[32] = {8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    Key256 Hp;
+    if (crypto_scalarmult_ed25519_noclamp(Hp.data(), eight_scalar, p_raw.data()) != 0) {
+        throw std::runtime_error("Fallo al multiplicar por cofactor 8 en hash_to_point.");
     }
     return Hp;
 }
@@ -196,10 +204,11 @@ bool RingSignatureEngine::verify(
         }
     }
 
-    // 2. Mitigación de subgrupo de baja torsión (Cofactor h = 8 en Key Image AUD-INFO-01)
+    // 2. Mitigación completa de subgrupo de baja torsión y cofactor 8 (AUD-INFO-01 & AUD-CRIT-01)
     Key256 I8;
-    const uint8_t eight[32] = {8};
-    if (crypto_scalarmult_ed25519_noclamp(I8.data(), eight, signature.key_image.data()) != 0) {
+    static const unsigned char eight_scalar[32] = {8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    if (crypto_scalarmult_ed25519_noclamp(I8.data(), eight_scalar, signature.key_image.data()) != 0) {
         return false;
     }
     static const uint8_t ed25519_identity[32] = {
@@ -209,7 +218,7 @@ bool RingSignatureEngine::verify(
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
     };
     if (sodium_memcmp(I8.data(), ed25519_identity, 32) == 0) {
-        return false; // Rechazar imágenes de clave en subgrupo de torsión pequeña
+        return false; // Rechazar imágenes de clave en subgrupo de torsión pequeña pura
     }
 
     Key256 current_c = signature.c0;
@@ -367,7 +376,7 @@ bool RingSignatureEngine::verify_burn_proof(
 }
 
 bool KeyImageLedger::register_key_image(const KeyImage& image) {
-    std::string hex_img = to_hex(image);
+    std::string hex_img = to_hex(canonical_key_image(image));
     if (spent_images_.find(hex_img) != spent_images_.end()) {
         return false; // Ya gastado (Doble Gasto)
     }
@@ -376,10 +385,11 @@ bool KeyImageLedger::register_key_image(const KeyImage& image) {
 }
 
 bool KeyImageLedger::is_spent(const KeyImage& image) const {
-    return spent_images_.find(to_hex(image)) != spent_images_.end();
+    return spent_images_.find(to_hex(canonical_key_image(image))) != spent_images_.end();
 }
 
 void KeyImageLedger::restore_key_image(const KeyImage& image) {
+    // Las imágenes recuperadas desde LMDB ya fueron canonicalizadas a (8 * I).
     spent_images_.insert(to_hex(image));
 }
 
