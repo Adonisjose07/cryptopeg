@@ -5,9 +5,43 @@
 // State
 let currentActiveWallet = null;
 let lastTumblerPlan = null;
+let wasmCryptoModule = null;
+let isWasmLoaded = false;
+
+// Initialize WebAssembly Cryptographic Core (Phase 3 Non-Custodial)
+async function initWasmCrypto() {
+  try {
+    if (typeof CryptoPegWasmModule === "function") {
+      wasmCryptoModule = await CryptoPegWasmModule();
+      if (wasmCryptoModule && wasmCryptoModule.initSodium && wasmCryptoModule.initSodium()) {
+        isWasmLoaded = true;
+        console.log("[WASM-CRYPTO] Módulo Criptográfico Wasm inicializado (Modo 100% No-Custodial)");
+        updateWasmBadge(true);
+        return;
+      }
+    }
+  } catch (e) {
+    console.info("[WASM-CRYPTO] Wasm module initialization skipped:", e.message);
+  }
+  updateWasmBadge(false);
+}
+
+function updateWasmBadge(active) {
+  const badge = document.getElementById("wasm-badge");
+  if (badge) {
+    if (active) {
+      badge.className = "text-[10px] uppercase font-bold tracking-wider bg-[#00A76F]/15 text-[#00A76F] border border-[#00A76F]/30 px-2.5 py-0.5 rounded-full inline-flex items-center";
+      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-[#00A76F] mr-1 animate-pulse"></span>Wasm No-Custodial`;
+    } else {
+      badge.className = "text-[10px] uppercase font-bold tracking-wider bg-[#919EAB]/15 text-[#919EAB] border border-[#919EAB]/30 px-2.5 py-0.5 rounded-full inline-flex items-center";
+      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-[#919EAB] mr-1"></span>Nodo Local 127.0.0.1`;
+    }
+  }
+}
 
 // On Page Load
 document.addEventListener("DOMContentLoaded", () => {
+  initWasmCrypto();
   fetchNodeData();
   fetchBlocks();
   updateDepositPreview();

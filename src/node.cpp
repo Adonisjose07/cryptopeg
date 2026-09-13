@@ -522,6 +522,109 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
     return true;
 }
 
+std::vector<Key256> Node::get_random_decoys(size_t count, const Key256& exclude_pubkey) {
+    std::lock_guard<std::mutex> lock(node_mutex_);
+    return select_decoys(count + 1, exclude_pubkey);
+}
+
+ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransaction& tx) {
+    std::lock_guard<std::mutex> lock(node_mutex_);
+
+    // 1. Validar que la firma de anillo contenga una imagen de clave válida en curva Ed25519
+    if (crypto_core_ed25519_is_valid_point(tx.ring_sig.key_image.data()) != 0) {
+        throw std::runtime_error("Imagen de clave no es un punto valido en Ed25519.");
+    }
+
+    // 2. Mitigación de cofactor 8 en key image (8 * I != Identidad)
+    unsigned char ki_8[32];
+    static const unsigned char eight_scalar[32] = {8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    if (crypto_scalarmult_ed25519_noclamp(ki_8, eight_scalar, tx.ring_sig.key_image.data()) != 0) {
+        throw std::runtime_error("Fallo escalar en comprobacion de torsion de imagen de clave.");
+    }
+    static const unsigned char ed25519_identity[32] = {
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    };
+    if (sodium_memcmp(ki_8, ed25519_identity, 32) == 0) {
+        throw std::runtime_error("Rechazado: imagen de clave en subgrupo de torsion pequenia de cofactor 8.");
+    }
+
+    // 3. Verificar doble gasto
+    if (key_image_ledger_.is_spent(tx.ring_sig.key_image) || db_.is_key_image_spent(tx.ring_sig.key_image)) {
+        throw std::runtime_error("Intento de DOBLE GASTO detectado: la imagen de clave ya fue utilizada.");
+    }
+
+    // 4. Verificar validez de puntos en los participantes del anillo MLSAG
+    for (const auto& r_pk : tx.ring_sig.ring_pubkeys) {
+        if (crypto_core_ed25519_is_valid_point(r_pk.data()) != 0) {
+            throw std::runtime_error("Punto invalido en participantes del anillo MLSAG.");
+        }
+    }
+
+    // 5. Verificar que al menos un participante del anillo pertenezca al pool conocido
+    bool has_known_member = false;
+    for (const auto& r_pk : tx.ring_sig.ring_pubkeys) {
+        for (const auto& u : utxo_pool_) {
+            if (sodium_memcmp(r_pk.data(), u.destination_one_time.data(), 32) == 0) {
+                has_known_member = true;
+                break;
+            }
+        }
+        if (has_known_member) break;
+    }
+    if (!has_known_member && !utxo_pool_.empty()) {
+        throw std::runtime_error("Ningun participante del anillo pertenece al ledger local.");
+    }
+
+    // 6. Verificar hash canónico
+    Hash256 canonical_hash = RingSignatureEngine::compute_canonical_tx_hash(
+        tx.outputs,
+        tx.public_fee,
+        tx.ring_sig.ring_pubkeys,
+        tx.ring_sig.key_image
+    );
+    if (sodium_memcmp(canonical_hash.data(), tx.tx_hash.data(), 32) != 0) {
+        throw std::runtime_error("Hash de transaccion no coincide con el hash canonico BLAKE2b.");
+    }
+
+    // 7. Verificar firma MLSAG
+    if (!RingSignatureEngine::verify(tx.tx_hash, tx.ring_sig)) {
+        throw std::runtime_error("Firma de anillo MLSAG matematicamente invalida.");
+    }
+
+    // 8. Registrar imagen de clave
+    key_image_ledger_.register_key_image(tx.ring_sig.key_image);
+
+    // 9. Actualizar libro mayor con las nuevas salidas
+    for (const auto& out : tx.outputs) {
+        utxo_pool_.push_back(out);
+    }
+
+    tx_history_.push_back(tx);
+
+    // 10. Empaquetar y asentar en Bloque LMDB atómico
+    uint64_t next_height = db_.get_top_height() + 1;
+    Block block;
+    block.header.height = next_height;
+    block.header.prev_block_hash = db_.get_top_block_hash();
+    block.header.timestamp = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count()
+    );
+    block.txs.push_back(tx);
+    block.header.merkle_root = block.compute_merkle_root();
+
+    db_.commit_block(block, vault_, tx.outputs, {tx.ring_sig.key_image});
+
+    if (on_block_mined_) {
+        on_block_mined_(block);
+    }
+
+    return tx;
+}
+
 void Node::print_status() const {
     std::lock_guard<std::mutex> lock(node_mutex_);
     std::cout << "\n================ [ESTADO DEL NODO CRIPTO (LMDB)] ================\n";

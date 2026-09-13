@@ -314,11 +314,22 @@ void RpcServer::setup_routes() {
     // 7. Depósito de USDT Público -> Acuñación 1:1 en Bóveda
     server_->Post("/api/v1/vault/deposit", [this](const httplib::Request& req, httplib::Response& res) {
         try {
-            // 1. Verificación de autenticación de Oráculo (AUD-CRIT-01)
+            // 1. Verificación de autenticación de Oráculo en tiempo constante (SEC-MED-01)
             const char* env_secret = std::getenv("ORACLE_SECRET");
+            if (!env_secret) {
+                static bool warned_secret = false;
+                if (!warned_secret) {
+                    std::cerr << "[ADVERTENCIA SEGURIDAD] ORACLE_SECRET no definida en variables de entorno. Usando valor por defecto para pruebas locales.\n";
+                    warned_secret = true;
+                }
+            }
             std::string expected_secret = env_secret ? env_secret : "cryptopeg_oracle_secret_2026";
             std::string provided_secret = req.get_header_value("X-Oracle-Secret");
-            if (provided_secret != expected_secret) {
+            bool secret_valid = false;
+            if (provided_secret.size() == expected_secret.size() && !provided_secret.empty()) {
+                secret_valid = (sodium_memcmp(provided_secret.data(), expected_secret.data(), expected_secret.size()) == 0);
+            }
+            if (!secret_valid) {
                 res.status = 401;
                 res.set_content(json{{"error", "No autorizado: se requiere cabecera 'X-Oracle-Secret' válida para acuñar depósitos."}}.dump(), "application/json");
                 return;
@@ -405,7 +416,7 @@ void RpcServer::setup_routes() {
             OneTimeOutput selected_utxo;
             bool found_utxo = false;
             for (const auto& u : node_.get_utxo_pool()) {
-                if (std::memcmp(u.destination_one_time.data(), target_pub.data(), 32) == 0) {
+                if (sodium_memcmp(u.destination_one_time.data(), target_pub.data(), 32) == 0) {
                     selected_utxo = u;
                     found_utxo = true;
                     break;
@@ -425,6 +436,114 @@ void RpcServer::setup_routes() {
                 {"ring_size", tx.ring_sig.ring_pubkeys.size()},
                 {"sent_amount", format_usdt(send_amount)},
                 {"fee", format_usdt(tx_fee)}
+            };
+            res.set_content(j.dump(2), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+        }
+    });
+
+    // 8.1. Dispensador de Señuelos para Firma No-Custodial en Cliente Wasm
+    server_->Get("/api/v1/chain/decoys", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            size_t count = 4;
+            if (req.has_param("count")) {
+                count = static_cast<size_t>(std::stoul(req.get_param_value("count")));
+                if (count > 64) count = 64; // Cota de cordura
+            }
+            Key256 exclude_pub{};
+            if (req.has_param("exclude")) {
+                auto ex_bytes = from_hex(req.get_param_value("exclude"));
+                if (ex_bytes.size() == 32) {
+                    std::memcpy(exclude_pub.data(), ex_bytes.data(), 32);
+                }
+            }
+
+            auto decoys = node_.get_random_decoys(count, exclude_pub);
+            json decoys_j = json::array();
+            for (const auto& d : decoys) {
+                decoys_j.push_back(to_hex(d));
+            }
+            json j = {
+                {"count", decoys.size()},
+                {"decoys", decoys_j}
+            };
+            res.set_content(j.dump(2), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+        }
+    });
+
+    // 8.2. Envío de Transacción Confidencial Pre-firmada por Cliente Wasm (No-Custodial Fase 3)
+    server_->Post("/api/v1/tx/push", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = json::parse(req.body);
+            ShieldedTransaction tx;
+
+            std::string tx_hash_hex = body.at("tx_hash").get<std::string>();
+            auto th_bytes = from_hex(tx_hash_hex);
+            if (th_bytes.size() != 32) throw std::invalid_argument("tx_hash debe tener 32 bytes.");
+            std::memcpy(tx.tx_hash.data(), th_bytes.data(), 32);
+
+            double fee_val = body.value("fee_usdt", 0.0);
+            tx.public_fee = parse_usdt(fee_val);
+            tx.timestamp = body.value("timestamp", "2026-09-13 00:00:00 UTC");
+
+            // Deserializar salidas (outputs)
+            const auto& outputs_arr = body.at("outputs");
+            for (const auto& out_j : outputs_arr) {
+                OneTimeOutput out;
+                auto eph_bytes = from_hex(out_j.at("ephemeral_pubkey").get<std::string>());
+                auto dst_bytes = from_hex(out_j.at("destination_one_time").get<std::string>());
+                if (eph_bytes.size() != 32 || dst_bytes.size() != 32) {
+                    throw std::invalid_argument("Claves de salida deben tener 32 bytes.");
+                }
+                std::memcpy(out.ephemeral_public_key.data(), eph_bytes.data(), 32);
+                std::memcpy(out.destination_one_time.data(), dst_bytes.data(), 32);
+                out.amount = parse_usdt(out_j.at("amount_usdt").get<double>());
+                tx.outputs.push_back(out);
+            }
+
+            // Deserializar firma de anillo (ring_sig)
+            const auto& sig_j = body.at("ring_sig");
+            auto ki_bytes = from_hex(sig_j.at("key_image").get<std::string>());
+            auto c0_bytes = from_hex(sig_j.at("c0").get<std::string>());
+            if (ki_bytes.size() != 32 || c0_bytes.size() != 32) {
+                throw std::invalid_argument("key_image y c0 deben tener 32 bytes.");
+            }
+            std::memcpy(tx.ring_sig.key_image.data(), ki_bytes.data(), 32);
+            std::memcpy(tx.ring_sig.c0.data(), c0_bytes.data(), 32);
+
+            const auto& ring_arr = sig_j.at("ring_pubkeys");
+            for (const auto& r_hex : ring_arr) {
+                auto pk_bytes = from_hex(r_hex.get<std::string>());
+                if (pk_bytes.size() != 32) throw std::invalid_argument("Miembro del anillo debe tener 32 bytes.");
+                Key256 pk;
+                std::memcpy(pk.data(), pk_bytes.data(), 32);
+                tx.ring_sig.ring_pubkeys.push_back(pk);
+            }
+
+            const auto& resp_arr = sig_j.at("responses");
+            for (const auto& resp_hex : resp_arr) {
+                auto s_bytes = from_hex(resp_hex.get<std::string>());
+                if (s_bytes.size() != 32) throw std::invalid_argument("Respuesta de firma debe tener 32 bytes.");
+                Key256 s;
+                std::memcpy(s.data(), s_bytes.data(), 32);
+                tx.ring_sig.responses.push_back(s);
+            }
+
+            // Asimilar la transacción pre-firmada a través del nodo
+            auto accepted_tx = node_.submit_pre_signed_transaction(tx);
+
+            json j = {
+                {"success", true},
+                {"block_height", node_.get_blockchain_height()},
+                {"tx_hash", to_hex(accepted_tx.tx_hash)},
+                {"key_image", to_hex(accepted_tx.ring_sig.key_image)},
+                {"ring_size", accepted_tx.ring_sig.ring_pubkeys.size()},
+                {"fee", format_usdt(accepted_tx.public_fee)}
             };
             res.set_content(j.dump(2), "application/json");
         } catch (const std::exception& e) {
@@ -460,7 +579,7 @@ void RpcServer::setup_routes() {
             OneTimeOutput selected_utxo;
             bool found_utxo = false;
             for (const auto& u : node_.get_utxo_pool()) {
-                if (std::memcmp(u.destination_one_time.data(), target_pub.data(), 32) == 0) {
+                if (sodium_memcmp(u.destination_one_time.data(), target_pub.data(), 32) == 0) {
                     selected_utxo = u;
                     found_utxo = true;
                     break;

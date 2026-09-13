@@ -148,6 +148,7 @@ contract CryptoPegVaultV2 is Ownable, ReentrancyGuard, Pausable, EIP712 {
             bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(legacyHash);
             recovered = ECDSA.recover(ethSignedHash, signature);
             require(recovered == validatorSigner, "Invalid signature: EIP-712 and legacy verification failed");
+            require(fee == 0, "Legacy signature does not authorize non-zero fee");
         }
 
         executedWithdrawals[orderId] = true;

@@ -53,6 +53,12 @@ public:
     // 5. Validación y asimilación de bloques provenientes de la red P2P
     bool apply_remote_block(const Block& block, std::string& error_msg);
 
+    // 6. Obtener señuelos aleatorios para composición no-custodial en cliente Wasm
+    std::vector<Key256> get_random_decoys(size_t count, const Key256& exclude_pubkey);
+
+    // 7. Asimilación y minado de una transacción confidencial pre-firmada (Fase 3 No-Custodial)
+    ShieldedTransaction submit_pre_signed_transaction(const ShieldedTransaction& tx);
+
     // Registro de callback cuando se mina/asienta un nuevo bloque localmente
     void set_on_block_mined(BlockCallback cb) {
         std::lock_guard<std::mutex> lock(node_mutex_);
