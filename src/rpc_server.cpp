@@ -479,6 +479,17 @@ void RpcServer::setup_routes() {
     // 8.2. Envío de Transacción Confidencial Pre-firmada por Cliente Wasm (No-Custodial Fase 3)
     server_->Post("/api/v1/tx/push", [this](const httplib::Request& req, httplib::Response& res) {
         try {
+            // Mitigación P0-03: Salvaguarda de integridad monetaria anti-inflación
+            const char* exp_flag = std::getenv("ENABLE_EXPERIMENTAL_TX_PUSH");
+            bool allow_push = (exp_flag != nullptr && (std::string(exp_flag) == "true" || std::string(exp_flag) == "1"));
+            if (!allow_push) {
+                res.status = 403;
+                res.set_content(json{{
+                    "error", "El endpoint experimental /api/v1/tx/push está temporalmente deshabilitado por salvaguarda de integridad monetaria (Hito 0 / P0-03) hasta la incorporación completa de pruebas de rango de conocimiento cero. Utilice /api/v1/tx/transfer para transferencias locales auditadas con conservación estricta de balance."
+                }}.dump(2), "application/json");
+                return;
+            }
+
             auto body = json::parse(req.body);
             ShieldedTransaction tx;
 

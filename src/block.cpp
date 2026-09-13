@@ -129,6 +129,7 @@ void serialize_withdrawal(ByteWriter& w, const WithdrawalReceipt& wdr) {
     w.write_u64(wdr.net_usdt_to_tumble);
     w.write_string(wdr.order_id);
     w.write_string(wdr.destination_address);
+    w.write_array(wdr.key_image);
 }
 
 WithdrawalReceipt deserialize_withdrawal(ByteReader& r) {
@@ -146,6 +147,11 @@ WithdrawalReceipt deserialize_withdrawal(ByteReader& r) {
         } else {
             wdr.destination_address = "";
         }
+    }
+    if (r.remaining() >= 32) {
+        wdr.key_image = r.read_array<32>();
+    } else {
+        wdr.key_image.fill(0);
     }
     return wdr;
 }
@@ -177,36 +183,46 @@ Hash256 BlockHeader::hash() const {
     return h;
 }
 
-// Merkle Root calculation
+// Merkle Root calculation (Canonical Economic Commitment AUD-CRIT-04 / P0-04)
 Hash256 Block::compute_merkle_root() const {
     std::vector<Hash256> leaves;
 
-    // Tx hashes
+    // 1. Transacciones protegidas (ya contienen hash canónico de salidas, comisiones, anillo e imagen de clave)
     for (const auto& tx : txs) {
         leaves.push_back(tx.tx_hash);
     }
 
-    // Deposit hashes
-    for (const auto& dep : deposits) {
+    // 2. Depósitos canónicos (compromiso total de montos, comisiones, tx_hash y outputs furtivos)
+    for (size_t i = 0; i < deposits.size(); ++i) {
+        const auto& dep = deposits[i];
+        ByteWriter dw;
+        dw.write_string(dep.tx_hash);
+        dw.write_u64(dep.gross_usdt_deposited);
+        dw.write_u64(dep.fee_to_pool);
+        dw.write_u64(dep.net_shielded_tokens_minted);
+        if (i < deposit_outputs.size()) {
+            dw.write_array(deposit_outputs[i].ephemeral_public_key);
+            dw.write_array(deposit_outputs[i].destination_one_time);
+            dw.write_u64(deposit_outputs[i].amount);
+        }
         Hash256 dh;
-        crypto_generichash(
-            dh.data(), 32,
-            reinterpret_cast<const uint8_t*>(dep.tx_hash.data()),
-            dep.tx_hash.size(),
-            nullptr, 0
-        );
+        auto db = dw.take_bytes();
+        crypto_generichash(dh.data(), 32, db.data(), db.size(), nullptr, 0);
         leaves.push_back(dh);
     }
 
-    // Withdrawal hashes
+    // 3. Retiros canónicos (compromiso total de montos quemados, fees, destino, orden y key image de quema)
     for (const auto& wdr : withdrawals) {
+        ByteWriter ww;
+        ww.write_string(wdr.order_id);
+        ww.write_u64(wdr.gross_tokens_burned);
+        ww.write_u64(wdr.fee_to_pool);
+        ww.write_u64(wdr.net_usdt_to_tumble);
+        ww.write_string(wdr.destination_address);
+        ww.write_array(wdr.key_image);
         Hash256 wh;
-        crypto_generichash(
-            wh.data(), 32,
-            reinterpret_cast<const uint8_t*>(wdr.order_id.data()),
-            wdr.order_id.size(),
-            nullptr, 0
-        );
+        auto wb = ww.take_bytes();
+        crypto_generichash(wh.data(), 32, wb.data(), wb.size(), nullptr, 0);
         leaves.push_back(wh);
     }
 

@@ -19,6 +19,7 @@ struct WithdrawalReceipt {
     Amount net_usdt_to_tumble;
     std::string order_id;
     std::string destination_address;
+    KeyImage key_image{};
 };
 
 struct ClaimReceipt {

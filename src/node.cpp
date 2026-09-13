@@ -60,24 +60,20 @@ DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recip
     DepositReceipt receipt = vault_.deposit(usdt_gross, custom_tx_hash);
 
     // 2. Generar el output furtivo (one-time stealth output) para el receptor.
-    // Si viene custom_tx_hash (depósito on-chain desde Arbitrum L2), se utiliza como semilla determinista
-    // para garantizar consenso absoluto y evitar bifurcaciones (forks) cuando múltiples oráculos minan el mismo bloque.
+    // Se utiliza siempre el hash de la transacción (Arbitrum Sepolia custom_tx_hash o el hash de recibo)
+    // como semilla determinista para garantizar consenso absoluto entre oráculos y evitar bifurcaciones.
     Hash256 seed;
-    const Hash256* seed_ptr = nullptr;
-    if (!custom_tx_hash.empty()) {
-        crypto_generichash(
-            seed.data(), 32,
-            reinterpret_cast<const uint8_t*>(custom_tx_hash.data()),
-            custom_tx_hash.size(),
-            nullptr, 0
-        );
-        seed_ptr = &seed;
-    }
+    crypto_generichash(
+        seed.data(), 32,
+        reinterpret_cast<const uint8_t*>(receipt.tx_hash.data()),
+        receipt.tx_hash.size(),
+        nullptr, 0
+    );
 
     OneTimeOutput utxo = StealthProtocol::create_one_time_output(
         recipient_address,
         receipt.net_shielded_tokens_minted,
-        seed_ptr
+        &seed
     );
 
     utxo_pool_.push_back(utxo);
@@ -113,7 +109,16 @@ std::vector<Key256> Node::select_decoys(size_t ring_size, const Key256& real_pub
     std::vector<Key256> candidates;
     for (const auto& out : utxo_pool_) {
         if (sodium_memcmp(out.destination_one_time.data(), real_pubkey.data(), 32) != 0) {
-            candidates.push_back(out.destination_one_time);
+            bool already = false;
+            for (const auto& c : candidates) {
+                if (sodium_memcmp(c.data(), out.destination_one_time.data(), 32) == 0) {
+                    already = true;
+                    break;
+                }
+            }
+            if (!already) {
+                candidates.push_back(out.destination_one_time);
+            }
         }
     }
 
@@ -126,19 +131,12 @@ std::vector<Key256> Node::select_decoys(size_t ring_size, const Key256& real_pub
     }
 
     std::vector<Key256> selected;
-    // Si hay suficientes salidas históricas en el ledger, seleccionamos hasta ring_size - 1.
-    // Si la red está en fase inicial/bootstrap con menos salidas que ring_size - 1,
-    // completamos los señuelos restantes usando puntos sobre la curva Ed25519 con CSPRNG puro (AUD-HIGH-03).
-    for (size_t i = 0; i < ring_size - 1; ++i) {
-        if (i < candidates.size()) {
-            selected.push_back(candidates[i]);
-        } else {
-            Key256 fake_priv, fake_pub;
-            crypto_core_ed25519_scalar_random(fake_priv.data());
-            crypto_scalarmult_ed25519_base_noclamp(fake_pub.data(), fake_priv.data());
-            sodium_memzero(fake_priv.data(), fake_priv.size());
-            selected.push_back(fake_pub);
-        }
+    // Remediación P1: NUNCA generar señuelos sintéticos fuera de cadena.
+    // Solo seleccionar salidas históricas reales presentes en el libro mayor.
+    size_t target_decoys = (ring_size > 0) ? (ring_size - 1) : 0;
+    size_t num_to_take = std::min(target_decoys, candidates.size());
+    for (size_t i = 0; i < num_to_take; ++i) {
+        selected.push_back(candidates[i]);
     }
 
     return selected;
@@ -286,6 +284,7 @@ TumblingPlan Node::withdraw_shielded(
     // 3. Procesar quema y comisión en la bóveda
     WithdrawalReceipt receipt = vault_.request_withdrawal(tokens_to_withdraw);
     receipt.destination_address = destination_public_usdt;
+    receipt.key_image = img;
 
     // 4. Si hubo cambio, re-emitir output privado para el usuario
     std::vector<OneTimeOutput> new_outs;
@@ -409,12 +408,86 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
         vault_.get_fee_pool_reserve()
     );
 
-    // 1. Validar depósitos
-    for (const auto& dep : block.deposits) {
+    // 1. Validar depósitos (Hito 0: AUD-CRIT-01 & AUD-CRIT-02 / P0-01)
+    if (block.deposits.size() != block.deposit_outputs.size()) {
+        error_msg = "Desajuste entre cantidad de recibos de deposito y salidas generadas.";
+        return false;
+    }
+
+    std::vector<std::string> block_deposit_txs;
+    for (size_t i = 0; i < block.deposits.size(); ++i) {
+        const auto& dep = block.deposits[i];
+        const auto& out = block.deposit_outputs[i];
+
+        if (dep.tx_hash.empty()) {
+            error_msg = "Deposito rechazado: tx_hash vacio.";
+            return false;
+        }
+
+        // 1.1 Idempotencia: Verificar que no haya sido procesado en LMDB
+        if (db_.is_deposit_tx_processed(dep.tx_hash)) {
+            error_msg = "Intento de reproduccion (replay): deposito ya procesado en ledger: " + dep.tx_hash;
+            return false;
+        }
+
+        // 1.2 Unicidad intra-bloque
+        for (const auto& existing_tx : block_deposit_txs) {
+            if (existing_tx == dep.tx_hash) {
+                error_msg = "Deposito duplicado dentro del mismo bloque: " + dep.tx_hash;
+                return false;
+            }
+        }
+        block_deposit_txs.push_back(dep.tx_hash);
+
+        // 1.3 Conservación económica y comisiones exactas
+        if (dep.gross_usdt_deposited == 0) {
+            error_msg = "Deposito invalido: monto bruto debe ser mayor a cero.";
+            return false;
+        }
+        Amount expected_fee = (dep.gross_usdt_deposited * vault_.get_deposit_fee_bps()) / 10000;
+        Amount expected_net = dep.gross_usdt_deposited - expected_fee;
+        if (dep.fee_to_pool != expected_fee || dep.net_shielded_tokens_minted != expected_net) {
+            error_msg = "Comision o acuniacion neta de deposito no coincide con los parametros de la boveda.";
+            return false;
+        }
+        if (out.amount != expected_net) {
+            error_msg = "El monto de la salida de deposito no coincide con el valor neto acuniado.";
+            return false;
+        }
+
+        // 1.4 Verificación Criptográfica de Derivación Determinista (Multi-Oráculo)
+        // seed = H(dep.tx_hash), r = scalar_reduce(H_64(seed)), R_expected = r*G
+        Hash256 seed;
+        crypto_generichash(
+            seed.data(), 32,
+            reinterpret_cast<const uint8_t*>(dep.tx_hash.data()),
+            dep.tx_hash.size(),
+            nullptr, 0
+        );
+        uint8_t hash_r[64];
+        crypto_generichash(hash_r, 64, seed.data(), 32, nullptr, 0);
+        Key256 expected_r;
+        crypto_core_ed25519_scalar_reduce(expected_r.data(), hash_r);
+        Key256 expected_R;
+        crypto_scalarmult_ed25519_base_noclamp(expected_R.data(), expected_r.data());
+        sodium_memzero(expected_r.data(), sizeof(expected_r));
+        sodium_memzero(hash_r, sizeof(hash_r));
+
+        if (sodium_memcmp(out.ephemeral_public_key.data(), expected_R.data(), 32) != 0) {
+            error_msg = "Prueba de derivacion determinista fallida: ephemeral_pubkey no coincide con la semilla de Arbitrum tx_hash.";
+            return false;
+        }
+
+        // 1.5 Validación de punto sobre curva Ed25519
+        if (crypto_core_ed25519_is_valid_point(out.destination_one_time.data()) == 0) {
+            error_msg = "Punto de destino en salida de deposito no es valido en la curva Ed25519.";
+            return false;
+        }
+
         try {
-            temp_vault.deposit(dep.gross_usdt_deposited);
+            temp_vault.deposit(dep.gross_usdt_deposited, dep.tx_hash);
         } catch (const std::exception& e) {
-            error_msg = "Deposito invalido en bloque: " + std::string(e.what());
+            error_msg = "Deposito invalido en boveda: " + std::string(e.what());
             return false;
         }
     }
@@ -471,18 +544,95 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             return false;
         }
 
+        // 2.3. Conservación estricta de balance anti-inflación (P0-03)
+        Amount tx_total_spent = tx.public_fee;
+        for (const auto& out : tx.outputs) {
+            if (out.amount == 0) {
+                error_msg = "Monto de salida en transaccion debe ser mayor a cero.";
+                return false;
+            }
+            tx_total_spent += out.amount;
+        }
+        Amount max_candidate = 0;
+        for (const auto& r_pk : tx.ring_sig.ring_pubkeys) {
+            for (const auto& u : utxo_pool_) {
+                if (sodium_memcmp(r_pk.data(), u.destination_one_time.data(), 32) == 0) {
+                    if (u.amount > max_candidate) max_candidate = u.amount;
+                }
+            }
+        }
+        if (!utxo_pool_.empty() && tx_total_spent > max_candidate) {
+            error_msg = "Violacion de conservacion de balance en transaccion remota: salidas superan el valor maximo de los inputs del anillo.";
+            return false;
+        }
+
         spent_images.push_back(tx.ring_sig.key_image);
         for (const auto& out : tx.outputs) {
             new_utxos.push_back(out);
         }
     }
 
-    // 3. Validar retiros
+    // 3. Validar retiros (Hito 0: P0-02 Prueba Criptográfica de Quema)
     for (const auto& wdr : block.withdrawals) {
+        if (wdr.gross_tokens_burned == 0) {
+            error_msg = "Retiro rechazado: monto quemado debe ser mayor a cero.";
+            return false;
+        }
+
+        // 3.1 Conservación económica y comisiones de retiro
+        Amount expected_fee = (wdr.gross_tokens_burned * vault_.get_withdraw_fee_bps()) / 10000;
+        Amount expected_net = wdr.gross_tokens_burned - expected_fee;
+        if (wdr.fee_to_pool != expected_fee || wdr.net_usdt_to_tumble != expected_net) {
+            error_msg = "Comision o monto neto de retiro no coincide con los parametros de la boveda.";
+            return false;
+        }
+
+        // 3.2 Validación de dirección destino pública
+        if (wdr.destination_address.empty()) {
+            error_msg = "Direccion publica de destino para retiro no puede estar vacia.";
+            return false;
+        }
+
+        // 3.3 Prueba criptográfica de quema e imagen de clave
+        if (crypto_core_ed25519_is_valid_point(wdr.key_image.data()) == 0) {
+            error_msg = "Imagen de clave de quema en retiro no es un punto valido en Ed25519.";
+            return false;
+        }
+
+        // Mitigación de cofactor 8 en key image (8 * I != Identidad)
+        unsigned char ki_8[32];
+        static const unsigned char eight_scalar[32] = {8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        if (crypto_scalarmult_ed25519_noclamp(ki_8, eight_scalar, wdr.key_image.data()) != 0) {
+            error_msg = "Fallo escalar en comprobacion de torsion de imagen de clave de retiro.";
+            return false;
+        }
+        static const unsigned char ed25519_id[32] = {
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        };
+        if (sodium_memcmp(ki_8, ed25519_id, 32) == 0) {
+            error_msg = "Rechazado: imagen de clave de retiro en subgrupo de torsion pequenia de cofactor 8.";
+            return false;
+        }
+
+        // 3.4 Protección anti-doble gasto de quema
+        if (key_image_ledger_.is_spent(wdr.key_image) || db_.is_key_image_spent(wdr.key_image)) {
+            error_msg = "Intento de doble gasto / doble quema en retiro: imagen de clave ya utilizada.";
+            return false;
+        }
+        for (const auto& ki : spent_images) {
+            if (sodium_memcmp(ki.data(), wdr.key_image.data(), 32) == 0) {
+                error_msg = "Imagen de clave duplicada en transacciones o retiros del mismo bloque.";
+                return false;
+            }
+        }
+        spent_images.push_back(wdr.key_image);
+
         try {
             temp_vault.request_withdrawal(wdr.gross_tokens_burned);
         } catch (const std::exception& e) {
-            error_msg = "Retiro invalido en bloque: " + std::string(e.what());
+            error_msg = "Retiro invalido en boveda: " + std::string(e.what());
             return false;
         }
     }
@@ -575,6 +725,33 @@ ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransactio
     }
     if (!has_known_member && !utxo_pool_.empty()) {
         throw std::runtime_error("Ningun participante del anillo pertenece al ledger local.");
+    }
+
+    // 5.1. Conservación estricta de balance anti-inflación (P0-03)
+    Amount total_spent = tx.public_fee;
+    for (const auto& out : tx.outputs) {
+        if (out.amount == 0) {
+            throw std::runtime_error("Salida de transaccion invalida: monto debe ser mayor a cero.");
+        }
+        total_spent += out.amount;
+    }
+
+    Amount max_ring_input_amount = 0;
+    for (const auto& r_pk : tx.ring_sig.ring_pubkeys) {
+        for (const auto& u : utxo_pool_) {
+            if (sodium_memcmp(r_pk.data(), u.destination_one_time.data(), 32) == 0) {
+                if (u.amount > max_ring_input_amount) {
+                    max_ring_input_amount = u.amount;
+                }
+            }
+        }
+    }
+
+    if (!utxo_pool_.empty() && total_spent > max_ring_input_amount) {
+        throw std::runtime_error("Violacion de conservacion de balance: la suma de salidas mas comision (" +
+                                 format_usdt(total_spent) +
+                                 ") excede el monto maximo posible de los inputs del anillo (" +
+                                 format_usdt(max_ring_input_amount) + ").");
     }
 
     // 6. Verificar hash canónico
