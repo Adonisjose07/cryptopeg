@@ -53,6 +53,7 @@ struct Block {
     std::vector<DepositReceipt> deposits;
     std::vector<WithdrawalReceipt> withdrawals;
     std::vector<OneTimeOutput> deposit_outputs;
+    std::vector<OneTimeOutput> withdrawal_outputs;
 
     Hash256 compute_merkle_root() const;
     Hash256 hash() const { return header.hash(); }

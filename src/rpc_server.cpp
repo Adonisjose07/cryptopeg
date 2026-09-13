@@ -198,6 +198,7 @@ void RpcServer::setup_routes() {
             wdrs_j.push_back(json{
                 {"gross_burned", format_usdt(w.gross_tokens_burned)},
                 {"fee_to_pool", format_usdt(w.fee_to_pool)},
+                {"fee_raw", w.fee_to_pool},
                 {"net_tumbled", format_usdt(w.net_usdt_to_tumble)},
                 {"net_amount_raw", w.net_usdt_to_tumble},
                 {"order_id", w.order_id},
@@ -460,7 +461,12 @@ void RpcServer::setup_routes() {
                 }
             }
 
-            auto decoys = node_.get_random_decoys(count, exclude_pub);
+            Amount target_amount = 0;
+            if (req.has_param("amount")) {
+                target_amount = static_cast<Amount>(std::stoull(req.get_param_value("amount")));
+            }
+
+            auto decoys = node_.get_random_decoys(count, exclude_pub, target_amount);
             json decoys_j = json::array();
             for (const auto& d : decoys) {
                 decoys_j.push_back(to_hex(d));

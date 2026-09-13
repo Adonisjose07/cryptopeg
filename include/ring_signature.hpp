@@ -47,6 +47,32 @@ public:
         const Hash256& message_hash,
         const RingSignature& signature
     );
+
+    // Hash canónico del mensaje de quema para retiros (AUD-H0-P0-01)
+    static Hash256 compute_burn_message_hash(
+        const std::string& order_id,
+        Amount gross_burned,
+        const std::string& destination_address
+    );
+
+    // Firma de prueba criptográfica de quema DLEQ (AUD-H0-P0-01)
+    static void sign_burn_proof(
+        const Hash256& burn_message_hash,
+        const Key256& one_time_pubkey,
+        const Key256& one_time_privkey,
+        KeyImage& out_key_image,
+        Key256& out_c0,
+        Key256& out_s
+    );
+
+    // Verificación de prueba criptográfica de quema DLEQ (AUD-H0-P0-01)
+    static bool verify_burn_proof(
+        const Hash256& burn_message_hash,
+        const Key256& one_time_pubkey,
+        const KeyImage& key_image,
+        const Key256& c0,
+        const Key256& s
+    );
 };
 
 // Registro de imágenes de clave para prevenir doble-gasto

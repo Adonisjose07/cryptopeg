@@ -54,7 +54,7 @@ public:
     bool apply_remote_block(const Block& block, std::string& error_msg);
 
     // 6. Obtener señuelos aleatorios para composición no-custodial en cliente Wasm
-    std::vector<Key256> get_random_decoys(size_t count, const Key256& exclude_pubkey);
+    std::vector<Key256> get_random_decoys(size_t count, const Key256& exclude_pubkey, Amount target_amount = 0);
 
     // 7. Asimilación y minado de una transacción confidencial pre-firmada (Fase 3 No-Custodial)
     ShieldedTransaction submit_pre_signed_transaction(const ShieldedTransaction& tx);
@@ -92,8 +92,8 @@ private:
     std::vector<ShieldedTransaction> tx_history_;
     BlockCallback on_block_mined_;
 
-    // Seleccionar N-1 señuelos aleatorios del conjunto de outputs
-    std::vector<Key256> select_decoys(size_t ring_size, const Key256& real_pubkey);
+    // Seleccionar N-1 señuelos aleatorios del conjunto de outputs con homogeneidad de denominación (AUD-H0-P0-02)
+    std::vector<Key256> select_decoys(size_t ring_size, const Key256& real_pubkey, Amount target_amount = 0);
 
     // Inicialización y recuperación desde LMDB
     void init_or_recover_database();

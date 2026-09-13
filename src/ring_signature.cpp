@@ -89,8 +89,8 @@ RingSignature RingSignatureEngine::sign(
     const Key256& real_privkey
 ) {
     size_t n = ring.size();
-    if (n < 2) {
-        throw std::invalid_argument("El anillo de señuelos debe tener al menos 2 participantes.");
+    if (n < 1) {
+        throw std::invalid_argument("El anillo de señuelos debe tener al menos 1 participante.");
     }
     if (real_index >= n) {
         throw std::out_of_range("El índice real está fuera de los límites del anillo.");
@@ -182,7 +182,7 @@ bool RingSignatureEngine::verify(
     const RingSignature& signature
 ) {
     size_t n = signature.ring_pubkeys.size();
-    if (n < 2 || signature.responses.size() != n) {
+    if (n < 1 || signature.responses.size() != n) {
         return false;
     }
 
@@ -217,7 +217,9 @@ bool RingSignatureEngine::verify(
     for (size_t i = 0; i < n; ++i) {
         // L_i = s_i * G + c_i * P_i
         Key256 sG, cP, L_i;
-        crypto_scalarmult_ed25519_base_noclamp(sG.data(), signature.responses[i].data());
+        if (crypto_scalarmult_ed25519_base_noclamp(sG.data(), signature.responses[i].data()) != 0) {
+            return false; // Verificación estricta de retorno (AUD-H0-P2-01)
+        }
         if (crypto_scalarmult_ed25519_noclamp(cP.data(), current_c.data(), signature.ring_pubkeys[i].data()) != 0) {
             return false;
         }
@@ -244,6 +246,124 @@ bool RingSignatureEngine::verify(
 
     // El anillo es válido si regresa exactamente a c0 (tiempo constante AUD-MED-01)
     return sodium_memcmp(current_c.data(), signature.c0.data(), 32) == 0;
+}
+
+Hash256 RingSignatureEngine::compute_burn_message_hash(
+    const std::string& order_id,
+    Amount gross_burned,
+    const std::string& destination_address
+) {
+    crypto_generichash_state state;
+    crypto_generichash_init(&state, nullptr, 0, 32);
+    crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>("BURN_PROOF_V1"), 13);
+    crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>(order_id.data()), order_id.size());
+    crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>(&gross_burned), sizeof(gross_burned));
+    crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>(destination_address.data()), destination_address.size());
+    Hash256 h;
+    crypto_generichash_final(&state, h.data(), 32);
+    return h;
+}
+
+void RingSignatureEngine::sign_burn_proof(
+    const Hash256& burn_message_hash,
+    const Key256& one_time_pubkey,
+    const Key256& one_time_privkey,
+    KeyImage& out_key_image,
+    Key256& out_c0,
+    Key256& out_s
+) {
+    // 1. Imagen de clave I = x * H_p(P)
+    out_key_image = compute_key_image(one_time_privkey, one_time_pubkey);
+
+    // 2. Secreto efímero alfa
+    Key256 alpha;
+    crypto_core_ed25519_scalar_random(alpha.data());
+
+    // 3. L = alpha * G
+    Key256 L;
+    if (crypto_scalarmult_ed25519_base_noclamp(L.data(), alpha.data()) != 0) {
+        secure_wipe(alpha);
+        throw std::runtime_error("Fallo al calcular L en prueba de quema.");
+    }
+
+    // 4. R = alpha * H_p(P)
+    Key256 Hp = hash_to_point(one_time_pubkey);
+    Key256 R;
+    if (crypto_scalarmult_ed25519_noclamp(R.data(), alpha.data(), Hp.data()) != 0) {
+        secure_wipe(alpha);
+        throw std::runtime_error("Fallo al calcular R en prueba de quema.");
+    }
+
+    // 5. Desafío c0 = H(m, L, R)
+    out_c0 = ring_hash_challenge(burn_message_hash, L, R);
+
+    // 6. Respuesta s = alpha - c0 * x (mod L)
+    Key256 cx;
+    crypto_core_ed25519_scalar_mul(cx.data(), out_c0.data(), one_time_privkey.data());
+    crypto_core_ed25519_scalar_sub(out_s.data(), alpha.data(), cx.data());
+
+    secure_wipe(alpha);
+    secure_wipe(cx);
+}
+
+bool RingSignatureEngine::verify_burn_proof(
+    const Hash256& burn_message_hash,
+    const Key256& one_time_pubkey,
+    const KeyImage& key_image,
+    const Key256& c0,
+    const Key256& s
+) {
+    if (crypto_core_ed25519_is_valid_point(one_time_pubkey.data()) == 0) {
+        return false;
+    }
+    if (crypto_core_ed25519_is_valid_point(key_image.data()) == 0) {
+        return false;
+    }
+
+    // Mitigación de cofactor 8 en key image
+    unsigned char ki_8[32];
+    static const unsigned char eight_scalar[32] = {8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    if (crypto_scalarmult_ed25519_noclamp(ki_8, eight_scalar, key_image.data()) != 0) {
+        return false;
+    }
+    static const uint8_t ed25519_identity[32] = {
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    if (sodium_memcmp(ki_8, ed25519_identity, 32) == 0) {
+        return false;
+    }
+
+    // L = s * G + c0 * P
+    Key256 sG, cP, L;
+    if (crypto_scalarmult_ed25519_base_noclamp(sG.data(), s.data()) != 0) {
+        return false;
+    }
+    if (crypto_scalarmult_ed25519_noclamp(cP.data(), c0.data(), one_time_pubkey.data()) != 0) {
+        return false;
+    }
+    if (crypto_core_ed25519_add(L.data(), sG.data(), cP.data()) != 0) {
+        return false;
+    }
+
+    // R = s * H_p(P) + c0 * I
+    Key256 Hp = hash_to_point(one_time_pubkey);
+    Key256 sHp, cI, R;
+    if (crypto_scalarmult_ed25519_noclamp(sHp.data(), s.data(), Hp.data()) != 0) {
+        return false;
+    }
+    if (crypto_scalarmult_ed25519_noclamp(cI.data(), c0.data(), key_image.data()) != 0) {
+        return false;
+    }
+    if (crypto_core_ed25519_add(R.data(), sHp.data(), cI.data()) != 0) {
+        return false;
+    }
+
+    Key256 c_check = ring_hash_challenge(burn_message_hash, L, R);
+    return (sodium_memcmp(c0.data(), c_check.data(), 32) == 0);
 }
 
 bool KeyImageLedger::register_key_image(const KeyImage& image) {

@@ -58,6 +58,8 @@ DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recip
 
     // 1. Asentar el depósito en la bóveda
     DepositReceipt receipt = vault_.deposit(usdt_gross, custom_tx_hash);
+    receipt.recipient_view_pub = recipient_address.view_public_key;
+    receipt.recipient_spend_pub = recipient_address.spend_public_key;
 
     // 2. Generar el output furtivo (one-time stealth output) para el receptor.
     // Se utiliza siempre el hash de la transacción (Arbitrum Sepolia custom_tx_hash o el hash de recibo)
@@ -105,9 +107,12 @@ DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recip
     return receipt;
 }
 
-std::vector<Key256> Node::select_decoys(size_t ring_size, const Key256& real_pubkey) {
+std::vector<Key256> Node::select_decoys(size_t ring_size, const Key256& real_pubkey, Amount target_amount) {
     std::vector<Key256> candidates;
     for (const auto& out : utxo_pool_) {
+        if (target_amount > 0 && out.amount != target_amount) {
+            continue; // Homogeneidad estricta de denominación (AUD-H0-P0-02)
+        }
         if (sodium_memcmp(out.destination_one_time.data(), real_pubkey.data(), 32) != 0) {
             bool already = false;
             for (const auto& c : candidates) {
@@ -170,9 +175,9 @@ ShieldedTransaction Node::transfer_shielded(
         throw std::runtime_error("Intento de DOBLE GASTO detectado: la imagen de clave ya fue utilizada.");
     }
 
-    // 4. Construir el anillo de señuelos (tamaño típico: 5 a 11)
+    // 4. Construir el anillo de señuelos (tamaño típico: 5 a 11 con denominación homogénea AUD-H0-P0-02)
     size_t ring_size = 5;
-    auto decoys = select_decoys(ring_size, input_utxo.destination_one_time);
+    auto decoys = select_decoys(ring_size, input_utxo.destination_one_time, input_utxo.amount);
 
     // Insertar la clave real en una posición aleatoria del anillo usando CSPRNG (AUD-HIGH-03)
     size_t actual_ring_size = decoys.size() + 1;
@@ -285,6 +290,22 @@ TumblingPlan Node::withdraw_shielded(
     WithdrawalReceipt receipt = vault_.request_withdrawal(tokens_to_withdraw);
     receipt.destination_address = destination_public_usdt;
     receipt.key_image = img;
+    receipt.burned_utxo_pubkey = input_utxo.destination_one_time;
+
+    // Generar prueba criptográfica de quema DLEQ (AUD-H0-P0-01)
+    Hash256 burn_msg = RingSignatureEngine::compute_burn_message_hash(
+        receipt.order_id,
+        receipt.gross_tokens_burned,
+        receipt.destination_address
+    );
+    RingSignatureEngine::sign_burn_proof(
+        burn_msg,
+        input_utxo.destination_one_time,
+        one_time_priv,
+        receipt.key_image,
+        receipt.burn_signature_c0,
+        receipt.burn_signature_s
+    );
 
     // 4. Si hubo cambio, re-emitir output privado para el usuario
     std::vector<OneTimeOutput> new_outs;
@@ -313,6 +334,9 @@ TumblingPlan Node::withdraw_shielded(
         ).count()
     );
     block.withdrawals.push_back(receipt);
+    for (const auto& co : new_outs) {
+        block.withdrawal_outputs.push_back(co);
+    }
     block.header.merkle_root = block.compute_merkle_root();
 
     db_.commit_block(block, vault_, new_outs, {img});
@@ -469,16 +493,83 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
         Key256 expected_r;
         crypto_core_ed25519_scalar_reduce(expected_r.data(), hash_r);
         Key256 expected_R;
-        crypto_scalarmult_ed25519_base_noclamp(expected_R.data(), expected_r.data());
-        sodium_memzero(expected_r.data(), sizeof(expected_r));
-        sodium_memzero(hash_r, sizeof(hash_r));
+        if (crypto_scalarmult_ed25519_base_noclamp(expected_R.data(), expected_r.data()) != 0) {
+            sodium_memzero(expected_r.data(), sizeof(expected_r));
+            sodium_memzero(hash_r, sizeof(hash_r));
+            error_msg = "Error al derivar clave publica efimera esperada.";
+            return false;
+        }
 
         if (sodium_memcmp(out.ephemeral_public_key.data(), expected_R.data(), 32) != 0) {
+            sodium_memzero(expected_r.data(), sizeof(expected_r));
+            sodium_memzero(hash_r, sizeof(hash_r));
             error_msg = "Prueba de derivacion determinista fallida: ephemeral_pubkey no coincide con la semilla de Arbitrum tx_hash.";
             return false;
         }
 
-        // 1.5 Validación de punto sobre curva Ed25519
+        // 1.5 Blindaje Criptográfico contra Secuestro de Depósitos (AUD-H0-P1-01)
+        // Reconstrucción algebraica: rB = r * B, s = scalar_reduce(H_64(rB)), P_expected = s*G + A
+        bool has_recipient_keys = false;
+        for (auto b : dep.recipient_view_pub) { if (b != 0) { has_recipient_keys = true; break; } }
+        if (!has_recipient_keys) {
+            sodium_memzero(expected_r.data(), sizeof(expected_r));
+            sodium_memzero(hash_r, sizeof(hash_r));
+            error_msg = "Rechazado: recibo de deposito carece de claves recipient_view_pub y recipient_spend_pub validas.";
+            return false;
+        }
+
+        if (crypto_core_ed25519_is_valid_point(dep.recipient_view_pub.data()) == 0 ||
+            crypto_core_ed25519_is_valid_point(dep.recipient_spend_pub.data()) == 0) {
+                sodium_memzero(expected_r.data(), sizeof(expected_r));
+                sodium_memzero(hash_r, sizeof(hash_r));
+                error_msg = "Claves de destinatario en recibo de deposito no son puntos validos en Ed25519.";
+                return false;
+            }
+            Key256 rB;
+            if (crypto_scalarmult_ed25519_noclamp(rB.data(), expected_r.data(), dep.recipient_view_pub.data()) != 0) {
+                sodium_memzero(expected_r.data(), sizeof(expected_r));
+                sodium_memzero(hash_r, sizeof(hash_r));
+                error_msg = "Multiplicacion escalar rB fallida en verificacion de deposito.";
+                return false;
+            }
+            uint8_t hash_s[64];
+            crypto_generichash(hash_s, 64, rB.data(), 32, nullptr, 0);
+            Key256 s_scalar;
+            crypto_core_ed25519_scalar_reduce(s_scalar.data(), hash_s);
+            Key256 hG;
+            if (crypto_scalarmult_ed25519_base_noclamp(hG.data(), s_scalar.data()) != 0) {
+                sodium_memzero(expected_r.data(), sizeof(expected_r));
+                sodium_memzero(hash_r, sizeof(hash_r));
+                sodium_memzero(rB.data(), sizeof(rB));
+                sodium_memzero(hash_s, sizeof(hash_s));
+                sodium_memzero(s_scalar.data(), sizeof(s_scalar));
+                error_msg = "Multiplicacion escalar hG fallida en verificacion de deposito.";
+                return false;
+            }
+            Key256 expected_P;
+            if (crypto_core_ed25519_add(expected_P.data(), hG.data(), dep.recipient_spend_pub.data()) != 0) {
+                sodium_memzero(expected_r.data(), sizeof(expected_r));
+                sodium_memzero(hash_r, sizeof(hash_r));
+                sodium_memzero(rB.data(), sizeof(rB));
+                sodium_memzero(hash_s, sizeof(hash_s));
+                sodium_memzero(s_scalar.data(), sizeof(s_scalar));
+                error_msg = "Suma escalar hG + A fallida en verificacion de deposito.";
+                return false;
+            }
+            sodium_memzero(rB.data(), sizeof(rB));
+            sodium_memzero(hash_s, sizeof(hash_s));
+            sodium_memzero(s_scalar.data(), sizeof(s_scalar));
+
+            if (sodium_memcmp(out.destination_one_time.data(), expected_P.data(), 32) != 0) {
+                sodium_memzero(expected_r.data(), sizeof(expected_r));
+                sodium_memzero(hash_r, sizeof(hash_r));
+                error_msg = "Violacion de integridad DKSAP: destination_one_time no coincide con la direccion del beneficiario.";
+                return false;
+            }
+        sodium_memzero(expected_r.data(), sizeof(expected_r));
+        sodium_memzero(hash_r, sizeof(hash_r));
+
+        // 1.6 Validación de punto sobre curva Ed25519
         if (crypto_core_ed25519_is_valid_point(out.destination_one_time.data()) == 0) {
             error_msg = "Punto de destino en salida de deposito no es valido en la curva Ed25519.";
             return false;
@@ -505,8 +596,8 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             tx.ring_sig.key_image
         );
         bool hash_valid = (sodium_memcmp(tx.tx_hash.data(), expected_canonical.data(), 32) == 0);
-        if (!hash_valid && !tx.outputs.empty()) {
-            // Compatibilidad hacia atrás con bloques históricos del génesis
+        if (!hash_valid && !tx.outputs.empty() && block.header.height == 0) {
+            // Compatibilidad hacia atrás exclusivamente para bloque génesis histórico (AUD-RES-02)
             Hash256 legacy_hash;
             crypto_generichash(legacy_hash.data(), 32, tx.outputs[0].destination_one_time.data(), 32, nullptr, 0);
             if (sodium_memcmp(tx.tx_hash.data(), legacy_hash.data(), 32) == 0) {
@@ -514,7 +605,7 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             }
         }
         if (!hash_valid) {
-            error_msg = "Hash de transaccion invalido (no coincide con el hash canonico ni historico).";
+            error_msg = "Hash de transaccion invalido (no coincide con el hash canonico BLAKE2b).";
             return false;
         }
 
@@ -523,28 +614,19 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             return false;
         }
 
+        // 2.2. Prevención de doble gasto intra-bloque e inter-bloque (AUD-H0-01)
+        for (const auto& ki : spent_images) {
+            if (sodium_memcmp(ki.data(), tx.ring_sig.key_image.data(), 32) == 0) {
+                error_msg = "Intento de doble gasto intra-bloque: imagen de clave duplicada en transacciones o retiros del mismo bloque.";
+                return false;
+            }
+        }
         if (key_image_ledger_.is_spent(tx.ring_sig.key_image) || db_.is_key_image_spent(tx.ring_sig.key_image)) {
             error_msg = "Intento de doble gasto: imagen de clave ya utilizada.";
             return false;
         }
 
-        // 2.2. Validar que al menos un participante del anillo pertenezca al pool conocido del ledger (AUD-CRIT-04)
-        bool has_known_ring_member = false;
-        for (const auto& r_pk : tx.ring_sig.ring_pubkeys) {
-            for (const auto& u : utxo_pool_) {
-                if (sodium_memcmp(r_pk.data(), u.destination_one_time.data(), 32) == 0) {
-                    has_known_ring_member = true;
-                    break;
-                }
-            }
-            if (has_known_ring_member) break;
-        }
-        if (!has_known_ring_member && !utxo_pool_.empty()) {
-            error_msg = "Transaccion remota rechazada: ningun participante del anillo pertenece al ledger.";
-            return false;
-        }
-
-        // 2.3. Conservación estricta de balance anti-inflación (P0-03)
+        // 2.3. Validar que TODOS los participantes del anillo pertenezcan al ledger y tengan denominación homogénea (AUD-H0-02, AUD-RES-01)
         Amount tx_total_spent = tx.public_fee;
         for (const auto& out : tx.outputs) {
             if (out.amount == 0) {
@@ -553,16 +635,32 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             }
             tx_total_spent += out.amount;
         }
-        Amount max_candidate = 0;
+
+        Amount ring_denomination = 0;
+        bool denomination_set = false;
         for (const auto& r_pk : tx.ring_sig.ring_pubkeys) {
+            bool found = false;
             for (const auto& u : utxo_pool_) {
                 if (sodium_memcmp(r_pk.data(), u.destination_one_time.data(), 32) == 0) {
-                    if (u.amount > max_candidate) max_candidate = u.amount;
+                    found = true;
+                    if (!denomination_set) {
+                        ring_denomination = u.amount;
+                        denomination_set = true;
+                    } else if (u.amount != ring_denomination) {
+                        error_msg = "Violacion de homogeneidad en anillo: miembros con denominaciones dispares en libro mayor.";
+                        return false;
+                    }
+                    break;
                 }
             }
+            if (!found) {
+                error_msg = "Transaccion rechazada: el participante del anillo no existe en el libro mayor.";
+                return false;
+            }
         }
-        if (!utxo_pool_.empty() && tx_total_spent > max_candidate) {
-            error_msg = "Violacion de conservacion de balance en transaccion remota: salidas superan el valor maximo de los inputs del anillo.";
+
+        if (!denomination_set || tx_total_spent > ring_denomination) {
+            error_msg = "Violacion de conservacion de balance en transaccion remota: salidas superan la denominacion de los inputs del anillo.";
             return false;
         }
 
@@ -572,7 +670,7 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
         }
     }
 
-    // 3. Validar retiros (Hito 0: P0-02 Prueba Criptográfica de Quema)
+    // 3. Validar retiros (Hito 0: AUD-H0-P0-01 Prueba Criptográfica de Quema)
     for (const auto& wdr : block.withdrawals) {
         if (wdr.gross_tokens_burned == 0) {
             error_msg = "Retiro rechazado: monto quemado debe ser mayor a cero.";
@@ -593,30 +691,58 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             return false;
         }
 
-        // 3.3 Prueba criptográfica de quema e imagen de clave
-        if (crypto_core_ed25519_is_valid_point(wdr.key_image.data()) == 0) {
-            error_msg = "Imagen de clave de quema en retiro no es un punto valido en Ed25519.";
+        // 3.3 Verificación del UTXO a quemar en el ledger
+        bool utxo_found = false;
+        Amount utxo_amount = 0;
+        for (const auto& u : utxo_pool_) {
+            if (sodium_memcmp(u.destination_one_time.data(), wdr.burned_utxo_pubkey.data(), 32) == 0) {
+                utxo_found = true;
+                utxo_amount = u.amount;
+                break;
+            }
+        }
+        if (!utxo_found) {
+            error_msg = "Retiro rechazado: el UTXO a quemar no existe en el libro mayor.";
+            return false;
+        }
+        if (utxo_amount < wdr.gross_tokens_burned) {
+            error_msg = "Retiro rechazado: fondos insuficientes en el UTXO para el retiro solicitado.";
             return false;
         }
 
-        // Mitigación de cofactor 8 en key image (8 * I != Identidad)
-        unsigned char ki_8[32];
-        static const unsigned char eight_scalar[32] = {8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                                                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-        if (crypto_scalarmult_ed25519_noclamp(ki_8, eight_scalar, wdr.key_image.data()) != 0) {
-            error_msg = "Fallo escalar en comprobacion de torsion de imagen de clave de retiro.";
-            return false;
+        // 3.3b Si hay cambio, verificar que exista la salida de cambio correspondiente en el bloque (AUD-H0-04)
+        Amount expected_change = utxo_amount - wdr.gross_tokens_burned;
+        if (expected_change > 0) {
+            bool change_found = false;
+            for (const auto& co : block.withdrawal_outputs) {
+                if (co.amount == expected_change) {
+                    change_found = true;
+                    break;
+                }
+            }
+            if (!change_found) {
+                error_msg = "Retiro rechazado: falta salida de cambio en el bloque correspondiente al UTXO quemado.";
+                return false;
+            }
         }
-        static const unsigned char ed25519_id[32] = {
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-        };
-        if (sodium_memcmp(ki_8, ed25519_id, 32) == 0) {
-            error_msg = "Rechazado: imagen de clave de retiro en subgrupo de torsion pequenia de cofactor 8.";
+
+        // 3.4 Verificación de prueba matemática de quema (DLEQ)
+        Hash256 burn_msg = RingSignatureEngine::compute_burn_message_hash(
+            wdr.order_id,
+            wdr.gross_tokens_burned,
+            wdr.destination_address
+        );
+        if (!RingSignatureEngine::verify_burn_proof(
+                burn_msg,
+                wdr.burned_utxo_pubkey,
+                wdr.key_image,
+                wdr.burn_signature_c0,
+                wdr.burn_signature_s)) {
+            error_msg = "Firma criptografica de quema invalida en retiro.";
             return false;
         }
 
-        // 3.4 Protección anti-doble gasto de quema
+        // 3.5 Protección anti-doble gasto de quema
         if (key_image_ledger_.is_spent(wdr.key_image) || db_.is_key_image_spent(wdr.key_image)) {
             error_msg = "Intento de doble gasto / doble quema en retiro: imagen de clave ya utilizada.";
             return false;
@@ -637,8 +763,11 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
         }
     }
 
-    // 4. Incorporar salidas de depósitos
+    // 4. Incorporar salidas de depósitos y de cambio de retiros (AUD-H0-04)
     for (const auto& out : block.deposit_outputs) {
+        new_utxos.push_back(out);
+    }
+    for (const auto& out : block.withdrawal_outputs) {
         new_utxos.push_back(out);
     }
 
@@ -672,9 +801,9 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
     return true;
 }
 
-std::vector<Key256> Node::get_random_decoys(size_t count, const Key256& exclude_pubkey) {
+std::vector<Key256> Node::get_random_decoys(size_t count, const Key256& exclude_pubkey, Amount target_amount) {
     std::lock_guard<std::mutex> lock(node_mutex_);
-    return select_decoys(count + 1, exclude_pubkey);
+    return select_decoys(count + 1, exclude_pubkey, target_amount);
 }
 
 ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransaction& tx) {
@@ -712,22 +841,29 @@ ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransactio
         }
     }
 
-    // 5. Verificar que al menos un participante del anillo pertenezca al pool conocido
-    bool has_known_member = false;
+    // 5. Verificar pertenencia y homogeneidad estricta de todos los miembros del anillo en el ledger (AUD-H0-02, AUD-H0-P0-02)
+    Amount ring_denomination = 0;
+    bool denomination_set = false;
     for (const auto& r_pk : tx.ring_sig.ring_pubkeys) {
+        bool found = false;
         for (const auto& u : utxo_pool_) {
             if (sodium_memcmp(r_pk.data(), u.destination_one_time.data(), 32) == 0) {
-                has_known_member = true;
+                found = true;
+                if (!denomination_set) {
+                    ring_denomination = u.amount;
+                    denomination_set = true;
+                } else if (u.amount != ring_denomination) {
+                    throw std::runtime_error("Violacion de homogeneidad en anillo: los miembros del anillo tienen diferentes denominaciones.");
+                }
                 break;
             }
         }
-        if (has_known_member) break;
-    }
-    if (!has_known_member && !utxo_pool_.empty()) {
-        throw std::runtime_error("Ningun participante del anillo pertenece al ledger local.");
+        if (!found) {
+            throw std::runtime_error("Transaccion rechazada: participante del anillo no existe en el libro mayor.");
+        }
     }
 
-    // 5.1. Conservación estricta de balance anti-inflación (P0-03)
+    // 5.1. Conservación estricta de balance anti-inflación
     Amount total_spent = tx.public_fee;
     for (const auto& out : tx.outputs) {
         if (out.amount == 0) {
@@ -736,22 +872,11 @@ ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransactio
         total_spent += out.amount;
     }
 
-    Amount max_ring_input_amount = 0;
-    for (const auto& r_pk : tx.ring_sig.ring_pubkeys) {
-        for (const auto& u : utxo_pool_) {
-            if (sodium_memcmp(r_pk.data(), u.destination_one_time.data(), 32) == 0) {
-                if (u.amount > max_ring_input_amount) {
-                    max_ring_input_amount = u.amount;
-                }
-            }
-        }
-    }
-
-    if (!utxo_pool_.empty() && total_spent > max_ring_input_amount) {
+    if (!denomination_set || total_spent > ring_denomination) {
         throw std::runtime_error("Violacion de conservacion de balance: la suma de salidas mas comision (" +
                                  format_usdt(total_spent) +
-                                 ") excede el monto maximo posible de los inputs del anillo (" +
-                                 format_usdt(max_ring_input_amount) + ").");
+                                 ") excede la denominacion del input del anillo (" +
+                                 format_usdt(ring_denomination) + ").");
     }
 
     // 6. Verificar hash canónico

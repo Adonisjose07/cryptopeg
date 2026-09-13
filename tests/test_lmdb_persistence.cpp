@@ -40,6 +40,41 @@ int main() {
         std::cout << "  [OK] Bloque Génesis verificado. Altura: " << gen_block.header.height
                   << " Hash: " << crypto::to_hex(gen_block.hash()).substr(0, 16) << "...\n";
 
+        // Test de regresión adversarial AUD-RES-01: Intento de inyección con pool vacío
+        {
+            crypto::Block evil_block;
+            evil_block.header.height = 1;
+            evil_block.header.prev_block_hash = node1.get_top_block_hash();
+            evil_block.header.timestamp = 1700000000;
+            
+            crypto::ShieldedTransaction evil_tx;
+            evil_tx.public_fee = 0;
+            evil_tx.ring_sig.ring_pubkeys = {alice_wallet.spend_public_key};
+            crypto::OneTimeOutput evil_out{};
+            evil_out.amount = 1000 * crypto::USDT_UNIT;
+            evil_out.ephemeral_public_key = alice_wallet.view_public_key;
+            evil_out.destination_one_time = alice_wallet.spend_public_key;
+            evil_tx.outputs.push_back(evil_out);
+            auto img = crypto::RingSignatureEngine::compute_key_image(alice_wallet.spend_private_key, alice_wallet.spend_public_key);
+            evil_tx.ring_sig.key_image = img;
+            evil_tx.tx_hash = crypto::RingSignatureEngine::compute_canonical_tx_hash(
+                evil_tx.outputs, evil_tx.public_fee, evil_tx.ring_sig.ring_pubkeys, evil_tx.ring_sig.key_image
+            );
+            evil_tx.ring_sig = crypto::RingSignatureEngine::sign(
+                evil_tx.tx_hash,
+                evil_tx.ring_sig.ring_pubkeys,
+                0,
+                alice_wallet.spend_private_key
+            );
+            evil_block.txs.push_back(evil_tx);
+            evil_block.header.merkle_root = evil_block.compute_merkle_root();
+
+            std::string err;
+            bool accepted = node1.apply_remote_block(evil_block, err);
+            assert(!accepted);
+            std::cout << "  [OK] Regresion AUD-RES-01 prevenida: bloque malicioso con pool vacio rechazado (" << err << ").\n";
+        }
+
         // Alice deposita 1,000 USDT
         crypto::Amount deposit_gross = 1000 * crypto::USDT_UNIT;
         auto receipt = node1.buy_shielded(deposit_gross, alice_wallet.get_public_address());

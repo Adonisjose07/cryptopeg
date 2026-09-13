@@ -7,19 +7,24 @@
 namespace crypto {
 
 struct DepositReceipt {
-    Amount gross_usdt_deposited;
-    Amount fee_to_pool;
-    Amount net_shielded_tokens_minted;
+    Amount gross_usdt_deposited{0};
+    Amount fee_to_pool{0};
+    Amount net_shielded_tokens_minted{0};
     std::string tx_hash;
+    Key256 recipient_view_pub{};
+    Key256 recipient_spend_pub{};
 };
 
 struct WithdrawalReceipt {
-    Amount gross_tokens_burned;
-    Amount fee_to_pool;
-    Amount net_usdt_to_tumble;
+    Amount gross_tokens_burned{0};
+    Amount fee_to_pool{0};
+    Amount net_usdt_to_tumble{0};
     std::string order_id;
     std::string destination_address;
     KeyImage key_image{};
+    Key256 burned_utxo_pubkey{};
+    Key256 burn_signature_c0{};
+    Key256 burn_signature_s{};
 };
 
 struct ClaimReceipt {

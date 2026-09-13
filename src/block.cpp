@@ -55,8 +55,8 @@ RingSignature deserialize_ring_sig(ByteReader& r) {
     }
 
     uint32_t resp_count = r.read_u32();
-    if (resp_count < 2 || resp_count > 64) {
-        throw std::runtime_error("Numero de respuestas de anillo fuera de limites de seguridad (2-64).");
+    if (resp_count < 1 || resp_count > 64) {
+        throw std::runtime_error("Numero de respuestas de anillo fuera de limites de seguridad (1-64).");
     }
     sig.responses.reserve(resp_count);
     for (uint32_t i = 0; i < resp_count; ++i) {
@@ -111,6 +111,8 @@ void serialize_deposit(ByteWriter& w, const DepositReceipt& dep) {
     w.write_u64(dep.fee_to_pool);
     w.write_u64(dep.net_shielded_tokens_minted);
     w.write_string(dep.tx_hash);
+    w.write_array(dep.recipient_view_pub);
+    w.write_array(dep.recipient_spend_pub);
 }
 
 DepositReceipt deserialize_deposit(ByteReader& r) {
@@ -119,6 +121,13 @@ DepositReceipt deserialize_deposit(ByteReader& r) {
     dep.fee_to_pool = r.read_u64();
     dep.net_shielded_tokens_minted = r.read_u64();
     dep.tx_hash = r.read_string();
+    if (r.remaining() >= 64) {
+        dep.recipient_view_pub = r.read_array<32>();
+        dep.recipient_spend_pub = r.read_array<32>();
+    } else {
+        dep.recipient_view_pub.fill(0);
+        dep.recipient_spend_pub.fill(0);
+    }
     return dep;
 }
 
@@ -130,6 +139,9 @@ void serialize_withdrawal(ByteWriter& w, const WithdrawalReceipt& wdr) {
     w.write_string(wdr.order_id);
     w.write_string(wdr.destination_address);
     w.write_array(wdr.key_image);
+    w.write_array(wdr.burned_utxo_pubkey);
+    w.write_array(wdr.burn_signature_c0);
+    w.write_array(wdr.burn_signature_s);
 }
 
 WithdrawalReceipt deserialize_withdrawal(ByteReader& r) {
@@ -152,6 +164,15 @@ WithdrawalReceipt deserialize_withdrawal(ByteReader& r) {
         wdr.key_image = r.read_array<32>();
     } else {
         wdr.key_image.fill(0);
+    }
+    if (r.remaining() >= 96) {
+        wdr.burned_utxo_pubkey = r.read_array<32>();
+        wdr.burn_signature_c0 = r.read_array<32>();
+        wdr.burn_signature_s = r.read_array<32>();
+    } else {
+        wdr.burned_utxo_pubkey.fill(0);
+        wdr.burn_signature_c0.fill(0);
+        wdr.burn_signature_s.fill(0);
     }
     return wdr;
 }
@@ -192,7 +213,7 @@ Hash256 Block::compute_merkle_root() const {
         leaves.push_back(tx.tx_hash);
     }
 
-    // 2. Depósitos canónicos (compromiso total de montos, comisiones, tx_hash y outputs furtivos)
+    // 2. Depósitos canónicos (compromiso total de montos, comisiones, tx_hash, recipient keys y outputs furtivos)
     for (size_t i = 0; i < deposits.size(); ++i) {
         const auto& dep = deposits[i];
         ByteWriter dw;
@@ -200,6 +221,8 @@ Hash256 Block::compute_merkle_root() const {
         dw.write_u64(dep.gross_usdt_deposited);
         dw.write_u64(dep.fee_to_pool);
         dw.write_u64(dep.net_shielded_tokens_minted);
+        dw.write_array(dep.recipient_view_pub);
+        dw.write_array(dep.recipient_spend_pub);
         if (i < deposit_outputs.size()) {
             dw.write_array(deposit_outputs[i].ephemeral_public_key);
             dw.write_array(deposit_outputs[i].destination_one_time);
@@ -211,7 +234,7 @@ Hash256 Block::compute_merkle_root() const {
         leaves.push_back(dh);
     }
 
-    // 3. Retiros canónicos (compromiso total de montos quemados, fees, destino, orden y key image de quema)
+    // 3. Retiros canónicos (compromiso total de montos quemados, fees, destino, orden, key image y prueba de quema)
     for (const auto& wdr : withdrawals) {
         ByteWriter ww;
         ww.write_string(wdr.order_id);
@@ -220,10 +243,25 @@ Hash256 Block::compute_merkle_root() const {
         ww.write_u64(wdr.net_usdt_to_tumble);
         ww.write_string(wdr.destination_address);
         ww.write_array(wdr.key_image);
+        ww.write_array(wdr.burned_utxo_pubkey);
+        ww.write_array(wdr.burn_signature_c0);
+        ww.write_array(wdr.burn_signature_s);
         Hash256 wh;
         auto wb = ww.take_bytes();
         crypto_generichash(wh.data(), 32, wb.data(), wb.size(), nullptr, 0);
         leaves.push_back(wh);
+    }
+
+    // 4. Salidas de cambio de retiros (AUD-H0-04)
+    for (const auto& out : withdrawal_outputs) {
+        ByteWriter wow;
+        wow.write_array(out.ephemeral_public_key);
+        wow.write_array(out.destination_one_time);
+        wow.write_u64(out.amount);
+        Hash256 woh;
+        auto wob = wow.take_bytes();
+        crypto_generichash(woh.data(), 32, wob.data(), wob.size(), nullptr, 0);
+        leaves.push_back(woh);
     }
 
     if (leaves.empty()) {
@@ -282,6 +320,12 @@ std::vector<uint8_t> Block::serialize() const {
         serialize_output(w, out);
     }
 
+    // Withdrawal change outputs (AUD-H0-04)
+    w.write_u32(static_cast<uint32_t>(withdrawal_outputs.size()));
+    for (const auto& out : withdrawal_outputs) {
+        serialize_output(w, out);
+    }
+
     return w.take_bytes();
 }
 
@@ -313,6 +357,14 @@ Block Block::deserialize(const uint8_t* data, size_t len) {
         block.deposit_outputs.reserve(out_count);
         for (uint32_t i = 0; i < out_count; ++i) {
             block.deposit_outputs.push_back(deserialize_output(r));
+        }
+    }
+
+    if (r.remaining() >= sizeof(uint32_t)) {
+        uint32_t out_count = r.read_u32();
+        block.withdrawal_outputs.reserve(out_count);
+        for (uint32_t i = 0; i < out_count; ++i) {
+            block.withdrawal_outputs.push_back(deserialize_output(r));
         }
     }
 

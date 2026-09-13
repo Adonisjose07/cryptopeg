@@ -175,11 +175,19 @@ async function main() {
 
       const events = await vaultContractFilter(fromBlock, toBlock);
 
+      // Orden canónico determinista estricto (AUD-H0-P1-02)
+      // Garantiza que todos los oráculos independientes procesen los eventos en el mismo orden exacto
+      events.sort((a, b) => {
+        if (a.blockNumber !== b.blockNumber) return a.blockNumber - b.blockNumber;
+        if (a.transactionIndex !== b.transactionIndex) return a.transactionIndex - b.transactionIndex;
+        const indexA = a.index !== undefined ? a.index : (a.logIndex !== undefined ? a.logIndex : 0);
+        const indexB = b.index !== undefined ? b.index : (b.logIndex !== undefined ? b.logIndex : 0);
+        return indexA - indexB;
+      });
+
       for (const event of events) {
         const txHash = event.transactionHash;
         if (processedTxHashes.has(txHash)) continue;
-
-        processedTxHashes.add(txHash);
 
         const grossUSDT = parseFloat(ethers.formatUnits(event.args.grossAmount, 6));
         const viewKeyHex = event.args.stealthPubView.replace("0x", "");
@@ -191,6 +199,7 @@ async function main() {
         console.log(`                 View Key: ${viewKeyHex.substring(0, 16)}...`);
         console.log(`                 Spend Key:${spendKeyHex.substring(0, 16)}...`);
 
+        let processedSuccessfully = false;
         try {
           const res = await fetch(`${NODE_DAEMON_URL}/api/v1/vault/deposit`, {
             method: "POST",
@@ -208,13 +217,26 @@ async function main() {
           });
 
           const data = await res.json();
-          if (res.ok) {
-            console.log(`[ORACLE-INBOUND] [OK] Acuñado en Blockchain Privada! Bloque #${data.block_height} | Net Minted: ${data.net_shielded_minted} | Fee: ${data.fee_to_pool}`);
+          if (res.ok || res.status === 409) {
+            processedTxHashes.add(txHash);
+            processedSuccessfully = true;
+            if (res.ok) {
+              console.log(`[ORACLE-INBOUND] [OK] Acuñado en Blockchain Privada! Bloque #${data.block_height} | Net Minted: ${data.net_shielded_minted} | Fee: ${data.fee_to_pool}`);
+            } else {
+              console.log(`[ORACLE-INBOUND] [INFO] Depósito ya procesado previamente en el nodo: ${txHash}`);
+            }
           } else {
-            console.error(`[ORACLE-INBOUND] [ERROR] Nodo rechazó el depósito:`, data.error);
+            console.error(`[ORACLE-INBOUND] [ERROR] Nodo rechazó el depósito (${res.status}):`, data.error);
           }
         } catch (fetchErr) {
           console.error(`[ORACLE-INBOUND] [ERROR] No se pudo conectar al daemon local (${NODE_DAEMON_URL}):`, fetchErr.message);
+        }
+
+        if (!processedSuccessfully) {
+          // Si falló por desconexión o error transitorio, retroceder cursor para reintentar en el próximo sondeo (AUD-H0-06)
+          lastCheckedL2Block = event.blockNumber > 0 ? event.blockNumber - 1 : lastCheckedL2Block;
+          saveState({ lastCheckedL2Block, lastCheckedChainHeight, processedTxHashes, processedWithdrawalOrders });
+          return;
         }
       }
 
