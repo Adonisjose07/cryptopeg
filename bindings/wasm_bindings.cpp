@@ -93,6 +93,8 @@ EMSCRIPTEN_BINDINGS(cryptopeg_wasm) {
             Key256 x = StealthProtocol::derive_one_time_private_key(w, out);
             secure_wipe(w.view_private_key);
             secure_wipe(w.spend_private_key);
+            sodium_memzero(vp_bytes.data(), vp_bytes.size());
+            sodium_memzero(sp_bytes.data(), sp_bytes.size());
 
             std::string x_hex = to_hex(x);
             secure_wipe(x);
@@ -120,6 +122,7 @@ EMSCRIPTEN_BINDINGS(cryptopeg_wasm) {
 
             KeyImage img = RingSignatureEngine::compute_key_image(priv, pub);
             secure_wipe(priv);
+            sodium_memzero(p_bytes.data(), p_bytes.size());
             return to_hex(img);
         }))
 
@@ -191,6 +194,7 @@ EMSCRIPTEN_BINDINGS(cryptopeg_wasm) {
 
             RingSignature sig = RingSignatureEngine::sign(tx_hash, ring, realIndex, priv);
             secure_wipe(priv);
+            sodium_memzero(priv_bytes.data(), priv_bytes.size());
 
             val sigObj = val::object();
             sigObj.set("key_image", to_hex(sig.key_image));

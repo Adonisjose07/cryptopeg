@@ -531,7 +531,7 @@ ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransactio
     std::lock_guard<std::mutex> lock(node_mutex_);
 
     // 1. Validar que la firma de anillo contenga una imagen de clave válida en curva Ed25519
-    if (crypto_core_ed25519_is_valid_point(tx.ring_sig.key_image.data()) != 0) {
+    if (crypto_core_ed25519_is_valid_point(tx.ring_sig.key_image.data()) == 0) {
         throw std::runtime_error("Imagen de clave no es un punto valido en Ed25519.");
     }
 
@@ -557,7 +557,7 @@ ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransactio
 
     // 4. Verificar validez de puntos en los participantes del anillo MLSAG
     for (const auto& r_pk : tx.ring_sig.ring_pubkeys) {
-        if (crypto_core_ed25519_is_valid_point(r_pk.data()) != 0) {
+        if (crypto_core_ed25519_is_valid_point(r_pk.data()) == 0) {
             throw std::runtime_error("Punto invalido en participantes del anillo MLSAG.");
         }
     }
