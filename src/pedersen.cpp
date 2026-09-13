@@ -91,6 +91,17 @@ bool Pedersen::verify_balance_conservation(
         return false;
     }
 
+    // Validación de puntos en la curva Ed25519 (AUD-INFO-01)
+    for (const auto& c : in_commitments) {
+        if (crypto_core_ed25519_is_valid_point(c.data()) == 0) return false;
+    }
+    for (const auto& c : out_commitments) {
+        if (crypto_core_ed25519_is_valid_point(c.data()) == 0) return false;
+    }
+    if (crypto_core_ed25519_is_valid_point(excess_blinding_pubkey.data()) == 0) {
+        return false;
+    }
+
     // Suma de entradas: Sum(C_in)
     Key256 sum_in = in_commitments[0];
     for (size_t i = 1; i < in_commitments.size(); ++i) {

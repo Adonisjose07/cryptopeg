@@ -45,10 +45,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     dos2unix \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
+# Crear usuario y grupo de sistema sin privilegios (AUD-LOW-01)
+RUN (userdel -r ubuntu 2>/dev/null || true) && \
+    (groupdel ubuntu 2>/dev/null || true) && \
+    groupadd -g 1000 cryptogroup && \
+    useradd -m -u 1000 -g cryptogroup -s /bin/bash cryptouser
+
 WORKDIR /app
-RUN mkdir -p /app/data/lmdb
+RUN mkdir -p /app/data/lmdb /app/contracts
 
 # Copy compiled binaries from builder
 COPY --from=builder /build/build/bin/crypto_node /app/crypto_node
@@ -68,6 +75,9 @@ RUN cd /app/contracts && npm install --omit=dev --no-audit --no-fund
 
 COPY entrypoint.sh /app/entrypoint.sh
 RUN dos2unix /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
+# Asignar permisos de directorio a cryptouser
+RUN chown -R cryptouser:cryptogroup /app
 
 EXPOSE 8080
 

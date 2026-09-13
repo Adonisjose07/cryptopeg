@@ -1,6 +1,8 @@
 #include "block.hpp"
 #include <cstring>
 #include <chrono>
+#include <stdexcept>
+#include <sodium.h>
 
 namespace crypto {
 
@@ -16,6 +18,15 @@ OneTimeOutput deserialize_output(ByteReader& r) {
     out.ephemeral_public_key = r.read_array<32>();
     out.destination_one_time = r.read_array<32>();
     out.amount = r.read_u64();
+
+    // Validación de puntos canónicos en la curva Ed25519 (AUD-INFO-01)
+    if (crypto_core_ed25519_is_valid_point(out.ephemeral_public_key.data()) == 0) {
+        throw std::runtime_error("Punto ephemeral_public_key invalido en salida deserializada.");
+    }
+    if (crypto_core_ed25519_is_valid_point(out.destination_one_time.data()) == 0) {
+        throw std::runtime_error("Punto destination_one_time invalido en salida deserializada.");
+    }
+
     return out;
 }
 
@@ -37,15 +48,33 @@ RingSignature deserialize_ring_sig(ByteReader& r) {
     RingSignature sig;
     sig.key_image = r.read_array<32>();
     sig.c0 = r.read_array<32>();
+
+    // 1. Validar punto de imagen de clave (AUD-INFO-01)
+    if (crypto_core_ed25519_is_valid_point(sig.key_image.data()) == 0) {
+        throw std::runtime_error("Punto key_image invalido en firma de anillo deserializada.");
+    }
+
     uint32_t resp_count = r.read_u32();
+    if (resp_count < 2 || resp_count > 64) {
+        throw std::runtime_error("Numero de respuestas de anillo fuera de limites de seguridad (2-64).");
+    }
     sig.responses.reserve(resp_count);
     for (uint32_t i = 0; i < resp_count; ++i) {
         sig.responses.push_back(r.read_array<32>());
     }
+
     uint32_t pk_count = r.read_u32();
+    if (pk_count != resp_count) {
+        throw std::runtime_error("Discrepancia entre respuestas y claves publicas en anillo.");
+    }
     sig.ring_pubkeys.reserve(pk_count);
     for (uint32_t i = 0; i < pk_count; ++i) {
-        sig.ring_pubkeys.push_back(r.read_array<32>());
+        auto pk = r.read_array<32>();
+        // 2. Validar que cada clave pública del anillo sea un punto válido en Ed25519 (AUD-INFO-01)
+        if (crypto_core_ed25519_is_valid_point(pk.data()) == 0) {
+            throw std::runtime_error("Clave publica del anillo no representa un punto valido en Ed25519.");
+        }
+        sig.ring_pubkeys.push_back(pk);
     }
     return sig;
 }

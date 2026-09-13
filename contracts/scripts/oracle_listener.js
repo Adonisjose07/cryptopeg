@@ -10,12 +10,14 @@ const NODE_DAEMON_URL = process.env.NODE_DAEMON_URL || "http://127.0.0.1:8080";
 const POLL_INTERVAL_MS = parseInt(process.env.ORACLE_POLL_INTERVAL_MS || "5000");
 const STATE_FILE = process.env.RELAYER_STATE_FILE || path.resolve(__dirname, "../../data/relayer_state.json");
 
-// ABI bidireccional para CryptoPegVault en Arbitrum L2
+// ABI bidireccional para CryptoPegVault (compatible con V1 y V2 EIP-712)
 const VAULT_ABI = [
   "event DepositInitiated(address indexed depositor, uint256 grossAmount, uint256 netMinted, uint256 fee, bytes32 stealthPubView, bytes32 stealthPubSpend, uint256 timestamp)",
   "event WithdrawalExecuted(bytes32 indexed orderId, address indexed recipient, uint256 amount, uint256 timestamp)",
+  "event WithdrawalExecuted(bytes32 indexed orderId, address indexed recipient, uint256 amount, uint256 fee, uint256 timestamp)",
   "function executedWithdrawals(bytes32 orderId) external view returns (bool)",
   "function withdraw(bytes32 orderId, address recipient, uint256 amount, bytes calldata signature) external",
+  "function withdraw(bytes32 orderId, address recipient, uint256 amount, uint256 fee, bytes calldata signature) external",
   "function validatorSigner() external view returns (address)",
   "function accumulatedFees() external view returns (uint256)"
 ];
@@ -300,18 +302,66 @@ async function main() {
               const network = await provider.getNetwork();
               const chainId = network.chainId;
 
-              // keccak256(abi.encodePacked(orderId, recipient, amount, block.chainid, address(this)))
-              const messageHash = ethers.solidityPackedKeccak256(
-                ["bytes32", "address", "uint256", "uint256", "address"],
-                [orderIdHash, recipient, amount, chainId, VAULT_ADDRESS]
-              );
+              // 1. Firma tipada estructurada EIP-712 (AUD-INFO-02)
+              const domain = {
+                name: "CryptoPegVault",
+                version: "2",
+                chainId: chainId,
+                verifyingContract: VAULT_ADDRESS
+              };
 
-              const signature = await validatorWallet.signMessage(ethers.getBytes(messageHash));
-              console.log(`[ORACLE-RELAYER] Firma ECDSA generada por Validador ${validatorWallet.address}.`);
-              console.log(`[ORACLE-RELAYER] Transmitiendo CryptoPegVault.withdraw(...) a Arbitrum Sepolia...`);
+              const types = {
+                Withdrawal: [
+                  { name: "orderId", type: "bytes32" },
+                  { name: "recipient", type: "address" },
+                  { name: "amount", type: "uint256" },
+                  { name: "fee", type: "uint256" }
+                ]
+              };
+
+              const withdrawFee = BigInt(w.fee_raw || 0);
+
+              const value = {
+                orderId: orderIdHash,
+                recipient: recipient,
+                amount: amount,
+                fee: withdrawFee
+              };
+
+              let signature;
+              try {
+                signature = await validatorWallet.signTypedData(domain, types, value);
+                console.log(`[ORACLE-RELAYER] Firma tipada EIP-712 generada por Validador ${validatorWallet.address}.`);
+              } catch (signErr) {
+                const messageHash = ethers.solidityPackedKeccak256(
+                  ["bytes32", "address", "uint256", "uint256", "address"],
+                  [orderIdHash, recipient, amount, chainId, VAULT_ADDRESS]
+                );
+                signature = await validatorWallet.signMessage(ethers.getBytes(messageHash));
+                console.log(`[ORACLE-RELAYER] Firma legada eth_sign generada por Validador ${validatorWallet.address}.`);
+              }
+
+              console.log(`[ORACLE-RELAYER] Transmitiendo withdraw(...) a Arbitrum Sepolia...`);
 
               try {
-                const tx = await vaultWithSigner.withdraw(orderIdHash, recipient, amount, signature);
+                let tx;
+                try {
+                  // Intentar interfaz V2 con soporte EIP-712 y comisiones
+                  tx = await vaultWithSigner["withdraw(bytes32,address,uint256,uint256,bytes)"](
+                    orderIdHash, recipient, amount, withdrawFee, signature
+                  );
+                } catch (v2Err) {
+                  // Si el contrato desplegado en Arbitrum es V1, ejecutar la sobrecarga legada
+                  const legacyHash = ethers.solidityPackedKeccak256(
+                    ["bytes32", "address", "uint256", "uint256", "address"],
+                    [orderIdHash, recipient, amount, chainId, VAULT_ADDRESS]
+                  );
+                  const legacySig = await validatorWallet.signMessage(ethers.getBytes(legacyHash));
+                  tx = await vaultWithSigner["withdraw(bytes32,address,uint256,bytes)"](
+                    orderIdHash, recipient, amount, legacySig
+                  );
+                }
+
                 console.log(`[ORACLE-RELAYER] Tx enviada a Arbitrum Sepolia! Hash: ${tx.hash}`);
                 console.log(`[ORACLE-RELAYER] Esperando confirmación del bloque L2...`);
 

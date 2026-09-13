@@ -186,6 +186,32 @@ bool RingSignatureEngine::verify(
         return false;
     }
 
+    // 1. Validación estricta de puntos canónicos en curva Ed25519 (AUD-INFO-01)
+    if (crypto_core_ed25519_is_valid_point(signature.key_image.data()) == 0) {
+        return false;
+    }
+    for (const auto& pk : signature.ring_pubkeys) {
+        if (crypto_core_ed25519_is_valid_point(pk.data()) == 0) {
+            return false;
+        }
+    }
+
+    // 2. Mitigación de subgrupo de baja torsión (Cofactor h = 8 en Key Image AUD-INFO-01)
+    Key256 I8;
+    const uint8_t eight[32] = {8};
+    if (crypto_scalarmult_ed25519_noclamp(I8.data(), eight, signature.key_image.data()) != 0) {
+        return false;
+    }
+    static const uint8_t ed25519_identity[32] = {
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    if (sodium_memcmp(I8.data(), ed25519_identity, 32) == 0) {
+        return false; // Rechazar imágenes de clave en subgrupo de torsión pequeña
+    }
+
     Key256 current_c = signature.c0;
 
     for (size_t i = 0; i < n; ++i) {

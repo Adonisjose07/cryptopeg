@@ -162,7 +162,9 @@ int main(int argc, char* argv[]) {
     std::cout << "  -> POST /api/v1/p2p/block         : Difusión Gossip de bloques\n";
     std::cout << "  -> GET  /api/v1/p2p/sync          : Sincronización rápida (IBD)\n\n";
 
-    g_rpc_server = std::make_unique<crypto::RpcServer>(node, "0.0.0.0", port);
+    const char* env_host = std::getenv("NODE_HOST");
+    std::string host = env_host ? env_host : "0.0.0.0";
+    g_rpc_server = std::make_unique<crypto::RpcServer>(node, host, port);
     g_rpc_server->set_p2p_manager(g_p2p_manager.get());
     g_rpc_server->listen();
 
