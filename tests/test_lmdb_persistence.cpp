@@ -326,13 +326,18 @@ int main() {
 
         // -> [TEST ADVERSARIAL P0-02] Modo Fail-Closed en lista blanca vacía
         std::cout << "\n  -> [TEST ADVERSARIAL P0-02] Modo Fail-Closed: Depósito P2P con lista de validadores vacía...\n";
-        crypto::Node fail_closed_node(50, 50, "./test_fail_closed_lmdb");
+        const std::string fail_closed_db = "./test_fail_closed_lmdb";
+        cleanup_test_dir(fail_closed_db);
+        crypto::Node fail_closed_node(50, 50, fail_closed_db);
+        crypto::Block fail_closed_block = fake_deposit_block;
+        fail_closed_block.header.height = fail_closed_node.get_blockchain_height() + 1;
+        fail_closed_block.header.prev_block_hash = fail_closed_node.get_top_block_hash();
         std::string err_fc;
-        bool fc_accepted = fail_closed_node.apply_remote_block(fake_deposit_block, err_fc);
+        bool fc_accepted = fail_closed_node.apply_remote_block(fail_closed_block, err_fc);
         assert(!fc_accepted);
         assert(err_fc.find("fail-closed") != std::string::npos);
         std::cout << "  [OK] Modo fail-closed activado: depósito rechazado ante lista de validadores vacía: " << err_fc << "\n";
-        cleanup_test_dir("./test_fail_closed_lmdb");
+        cleanup_test_dir(fail_closed_db);
 
         // -> [TEST ADVERSARIAL P1-01] Quórum Federado M-de-N
         std::cout << "\n  -> [TEST ADVERSARIAL P1-01] Quórum M-de-N (2-de-3 requerido)...\n";
