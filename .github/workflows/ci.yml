@@ -1,3 +1,4 @@
+# CI revalidation after security hardening batch
 name: CryptoPeg CI
 
 on:
