@@ -399,10 +399,12 @@ int main() {
 
         bad_change_block.withdrawals.push_back(evil_wdr);
 
-        // El productor malicioso intenta desviar el cambio a su propia clave atacante
-        crypto::OneTimeOutput hijacked_change = fake_out;
-        hijacked_change.amount = fake_out.amount - evil_wdr.gross_tokens_burned;
-        randombytes_buf(hijacked_change.destination_one_time.data(), 32); // Clave diferente a legit_change_pk
+        // El productor malicioso intenta desviar el cambio a un output válido controlado por el atacante.
+        auto attacker_wallet = crypto::StealthWallet::generate_random();
+        crypto::OneTimeOutput hijacked_change = crypto::StealthProtocol::create_one_time_output(
+            attacker_wallet.get_public_address(),
+            fake_out.amount - evil_wdr.gross_tokens_burned
+        );
         bad_change_block.withdrawal_outputs.push_back(hijacked_change);
 
         bad_change_block.header.merkle_root = bad_change_block.compute_merkle_root();
