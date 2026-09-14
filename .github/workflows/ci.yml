@@ -38,29 +38,33 @@ jobs:
         run: |
           cmake --build build --parallel 2
 
-      - name: Test vault precision
-        run: ./build/bin/test_vault_precision
-
-      - name: Test stealth privacy
-        run: ./build/bin/test_stealth_privacy
-
-      - name: Test tumbler mixer
-        run: ./build/bin/test_tumbler_mixer
-
-      - name: Test LMDB persistence
-        run: ./build/bin/test_lmdb_persistence
-
-      - name: Test RPC API
-        run: ./build/bin/test_rpc_api
-
-      - name: Test mnemonic wallet
-        run: ./build/bin/test_mnemonic_wallet
-
-      - name: Test P2P network
-        run: ./build/bin/test_p2p_network
-
-      - name: Test cryptographic primitives
-        run: ./build/bin/test_crypto_primitives
+      - name: Run complete C++ unit test suite
+        shell: bash
+        run: |
+          set +e
+          status=0
+          tests=(
+            test_vault_precision
+            test_stealth_privacy
+            test_tumbler_mixer
+            test_lmdb_persistence
+            test_rpc_api
+            test_mnemonic_wallet
+            test_p2p_network
+            test_crypto_primitives
+          )
+          for test_name in "${tests[@]}"; do
+            echo "============================================================"
+            echo "Running ${test_name}"
+            echo "============================================================"
+            "./build/bin/${test_name}"
+            rc=$?
+            if [ $rc -ne 0 ]; then
+              echo "::error title=${test_name} failed::Exit code ${rc}"
+              status=1
+            fi
+          done
+          exit $status
 
   solidity-tests:
     name: Smart Contracts and Oracle Tests
