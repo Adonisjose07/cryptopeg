@@ -23,6 +23,9 @@ using Hash256 = std::array<uint8_t, 32>;
 using KeyImage = std::array<uint8_t, 32>;
 using Signature64 = std::array<uint8_t, 64>;
 
+constexpr uint32_t PROTOCOL_VERSION = 3;
+constexpr Amount MAX_TRANSACTION_AMOUNT = 100'000'000'000'000ULL; // 100,000,000 USDT límite protocolario
+
 // Adición aritmética segura contra desbordamiento de enteros (AUD-H0-P0-02)
 inline bool safe_add_amount(Amount a, Amount b, Amount& result) {
 #if defined(__GNUC__) || defined(__clang__)
@@ -31,6 +34,30 @@ inline bool safe_add_amount(Amount a, Amount b, Amount& result) {
     if (UINT64_MAX - a < b) return false;
     result = a + b;
     return true;
+#endif
+}
+
+// Sustracción aritmética segura contra desbordamiento de enteros (underflow)
+inline bool safe_sub_amount(Amount a, Amount b, Amount& result) {
+    if (a < b) return false;
+    result = a - b;
+    return true;
+}
+
+// Cálculo exacto y seguro de comisiones en punto fijo con enteros de 128 bits (Auditoría v3 - P1-04)
+inline Amount safe_fee_calc(Amount amount, uint32_t bps) {
+    if (bps > 10000) {
+        throw std::invalid_argument("Tasa de comisión excede el límite máximo de 10000 bps (100%).");
+    }
+#if defined(__SIZEOF_INT128__)
+    unsigned __int128 product = static_cast<unsigned __int128>(amount) * bps;
+    return static_cast<Amount>(product / 10000ULL);
+#else
+    if (bps == 0 || amount == 0) return 0;
+    if (UINT64_MAX / bps < amount) {
+        throw std::overflow_error("Desbordamiento aritmético en cálculo de comisión.");
+    }
+    return (amount * bps) / 10000ULL;
 #endif
 }
 
@@ -108,6 +135,32 @@ inline KeyImage canonical_key_image(const KeyImage& image) {
     if (crypto_core_ed25519_add(p4.data(), p2.data(), p2.data()) != 0) return image;
     if (crypto_core_ed25519_add(p8.data(), p4.data(), p4.data()) != 0) return image;
     return p8;
+}
+
+inline Hash256 compute_deposit_attestation_hash(
+    uint64_t chain_id,
+    const std::string& contract_address,
+    const std::string& tx_hash,
+    uint32_t log_index,
+    Amount gross_amount,
+    const Key256& view_pub,
+    const Key256& spend_pub,
+    uint64_t l2_block_number
+) {
+    crypto_hash_sha256_state state;
+    crypto_hash_sha256_init(&state);
+    crypto_hash_sha256_update(&state, reinterpret_cast<const uint8_t*>("DEPOSIT_ATTESTATION_V1"), 22);
+    crypto_hash_sha256_update(&state, reinterpret_cast<const uint8_t*>(&chain_id), sizeof(chain_id));
+    crypto_hash_sha256_update(&state, reinterpret_cast<const uint8_t*>(contract_address.data()), contract_address.size());
+    crypto_hash_sha256_update(&state, reinterpret_cast<const uint8_t*>(tx_hash.data()), tx_hash.size());
+    crypto_hash_sha256_update(&state, reinterpret_cast<const uint8_t*>(&log_index), sizeof(log_index));
+    crypto_hash_sha256_update(&state, reinterpret_cast<const uint8_t*>(&gross_amount), sizeof(gross_amount));
+    crypto_hash_sha256_update(&state, view_pub.data(), 32);
+    crypto_hash_sha256_update(&state, spend_pub.data(), 32);
+    crypto_hash_sha256_update(&state, reinterpret_cast<const uint8_t*>(&l2_block_number), sizeof(l2_block_number));
+    Hash256 h;
+    crypto_hash_sha256_final(&state, h.data());
+    return h;
 }
 
 } // namespace crypto

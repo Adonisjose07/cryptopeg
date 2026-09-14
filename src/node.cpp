@@ -77,6 +77,29 @@ void Node::add_authorized_validator(const Key256& pub_key_32) {
     authorized_validators_.push_back(pub_key_32);
 }
 
+void Node::recover_state_from_db() {
+    // Presupone que node_mutex_ ya está adquirido por el llamador
+    db_.load_vault_state(vault_);
+    utxo_pool_ = db_.load_all_utxos();
+
+    key_image_ledger_.clear();
+    auto key_images = db_.load_all_key_images();
+    for (const auto& ki : key_images) {
+        key_image_ledger_.restore_key_image(ki);
+    }
+
+    // Reconstruir historial de transacciones en memoria
+    tx_history_.clear();
+    for (uint64_t h = 1; h <= db_.get_top_height(); ++h) {
+        Block blk;
+        if (db_.get_block_by_height(h, blk)) {
+            for (const auto& tx : blk.txs) {
+                tx_history_.push_back(tx);
+            }
+        }
+    }
+}
+
 void Node::init_or_recover_database() {
     std::lock_guard<std::mutex> lock(node_mutex_);
     db_.open(db_path_);
@@ -90,30 +113,23 @@ void Node::init_or_recover_database() {
         Block genesis = Block::create_genesis();
         db_.commit_block(genesis, vault_, {}, {});
     } else {
-        // Recuperar estado desde LMDB
-        db_.load_vault_state(vault_);
-        utxo_pool_ = db_.load_all_utxos();
-
-        auto key_images = db_.load_all_key_images();
-        for (const auto& ki : key_images) {
-            key_image_ledger_.restore_key_image(ki);
-        }
-
-        // Reconstruir historial de transacciones en memoria
-        tx_history_.clear();
-        for (uint64_t h = 1; h <= db_.get_top_height(); ++h) {
-            Block blk;
-            if (db_.get_block_by_height(h, blk)) {
-                for (const auto& tx : blk.txs) {
-                    tx_history_.push_back(tx);
-                }
-            }
-        }
+        recover_state_from_db();
     }
 }
 
-DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recipient_address, const std::string& custom_tx_hash, uint64_t custom_timestamp) {
+DepositReceipt Node::buy_shielded(
+    Amount usdt_gross,
+    const StealthAddress& recipient_address,
+    const std::string& custom_tx_hash,
+    uint64_t custom_timestamp,
+    const std::vector<std::array<uint8_t, 64>>& cosigner_secret_keys
+) {
     std::lock_guard<std::mutex> lock(node_mutex_);
+
+    // Guardar estado contable previo de vault_ en caso de que falle el quórum
+    Amount prev_col = vault_.get_total_collateral();
+    Amount prev_circ = vault_.get_circulating_shielded_supply();
+    Amount prev_fee = vault_.get_fee_pool_reserve();
 
     // 1. Asentar el depósito en la bóveda
     DepositReceipt receipt = vault_.deposit(usdt_gross, custom_tx_hash);
@@ -159,6 +175,26 @@ DepositReceipt Node::buy_shielded(Amount usdt_gross, const StealthAddress& recip
 
     if (has_validator_key_) {
         block.header.sign(validator_secret_key_.data(), validator_pubkey_);
+    }
+    for (const auto& c_sk : cosigner_secret_keys) {
+        Key256 c_pk;
+        crypto_sign_ed25519_sk_to_pk(c_pk.data(), c_sk.data());
+        Signature64 c_sig;
+        crypto_sign_detached(c_sig.data(), nullptr, block.header.signing_hash().data(), 32, c_sk.data());
+        block.header.add_quorum_signature(c_pk, c_sig);
+    }
+
+    // Verificar quórum M-de-N antes de hacer commit local si la lista de oráculos autorizados no está vacía (P1-01)
+    if (!authorized_validators_.empty()) {
+        size_t valid_quorum = block.header.verify_quorum(authorized_validators_);
+        uint32_t required_quorum = std::max(1U, validator_quorum_threshold_);
+        if (valid_quorum < required_quorum) {
+            utxo_pool_.pop_back();
+            vault_.restore_state(prev_col, prev_circ, prev_fee);
+            throw std::runtime_error("Quórum insuficiente de validadores para minar depósito: se requieren " +
+                                     std::to_string(required_quorum) + " firmas válidas, se obtuvieron " +
+                                     std::to_string(valid_quorum) + ".");
+        }
     }
 
     db_.commit_block(block, vault_, {utxo}, {});
@@ -363,11 +399,27 @@ TumblingPlan Node::withdraw_shielded(
     receipt.key_image = img;
     receipt.burned_utxo_pubkey = input_utxo.destination_one_time;
 
-    // Generar prueba criptográfica de quema DLEQ (AUD-H0-P0-01)
+    // 4. Si hubo cambio, re-emitir output privado para el usuario y ligarlo criptográficamente (Auditoría v3 - P1-02)
+    std::vector<OneTimeOutput> new_outs;
+    Key256 change_pubkey{};
+    Amount change = input_utxo.amount - tokens_to_withdraw;
+    if (change > 0) {
+        OneTimeOutput change_out = StealthProtocol::create_one_time_output(
+            burner_wallet.get_public_address(),
+            change
+        );
+        change_pubkey = change_out.destination_one_time;
+        utxo_pool_.push_back(change_out);
+        new_outs.push_back(change_out);
+    }
+    receipt.change_output_pubkey = change_pubkey;
+
+    // Generar prueba criptográfica de quema DLEQ ligando destino de cambio (Auditoría v3 - P1-02)
     Hash256 burn_msg = RingSignatureEngine::compute_burn_message_hash(
         receipt.order_id,
         receipt.gross_tokens_burned,
-        receipt.destination_address
+        receipt.destination_address,
+        receipt.change_output_pubkey
     );
     RingSignatureEngine::sign_burn_proof(
         burn_msg,
@@ -377,18 +429,6 @@ TumblingPlan Node::withdraw_shielded(
         receipt.burn_signature_c0,
         receipt.burn_signature_s
     );
-
-    // 4. Si hubo cambio, re-emitir output privado para el usuario
-    std::vector<OneTimeOutput> new_outs;
-    Amount change = input_utxo.amount - tokens_to_withdraw;
-    if (change > 0) {
-        OneTimeOutput change_out = StealthProtocol::create_one_time_output(
-            burner_wallet.get_public_address(),
-            change
-        );
-        utxo_pool_.push_back(change_out);
-        new_outs.push_back(change_out);
-    }
 
     // Registrar imagen de clave
     key_image_ledger_.register_key_image(img);
@@ -482,42 +522,148 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
     std::lock_guard<std::mutex> lock(node_mutex_);
 
     uint64_t current_height = db_.get_top_height();
-    if (block.header.height != current_height + 1) {
-        error_msg = "Altura de bloque inválida: se esperaba " + std::to_string(current_height + 1) +
-                    ", recibido " + std::to_string(block.header.height);
+
+    // Regla determinista de Fork-Choice y resolución canónica de bifurcaciones (P1-05):
+    bool is_reorg = false;
+    Block local_top;
+    if (block.header.height == current_height && current_height > 0) {
+        if (!db_.get_block_by_height(current_height, local_top)) {
+            error_msg = "Error interno: no se pudo recuperar el bloque local en la punta.";
+            return false;
+        }
+
+        // Si es exactamente el mismo bloque, ya está procesado y asentado
+        if (std::memcmp(block.header.merkle_root.data(), local_top.header.merkle_root.data(), 32) == 0 &&
+            std::memcmp(block.header.prev_block_hash.data(), local_top.header.prev_block_hash.data(), 32) == 0) {
+            return true;
+        }
+
+        // Ambos bloques competidores deben descender del mismo bloque previo
+        if (std::memcmp(block.header.prev_block_hash.data(), local_top.header.prev_block_hash.data(), 32) != 0) {
+            error_msg = "Bifurcación no soportada: bloques competidores en altura " + std::to_string(current_height) +
+                        " no comparten el mismo ancestro inmediato.";
+            return false;
+        }
+
+        size_t remote_quorum = block.header.verify_quorum(authorized_validators_);
+        size_t local_quorum = local_top.header.verify_quorum(authorized_validators_);
+
+        bool remote_preferred = false;
+        if (remote_quorum > local_quorum) {
+            remote_preferred = true;
+        } else if (remote_quorum == local_quorum) {
+            // Desempate lexicográfico determinista por hash de bloque
+            if (to_hex(block.hash()) < to_hex(local_top.hash())) {
+                remote_preferred = true;
+            }
+        }
+
+        if (!remote_preferred) {
+            error_msg = "Bloque competidor rechazado por Fork-Choice: el bloque local posee mayor peso de quórum o prioridad léxica.";
+            return false;
+        }
+
+        // Ejecutar reorg atómico en LMDB: rollback del bloque local
+        if (!db_.rollback_top_block()) {
+            error_msg = "Fallo al ejecutar rollback del bloque local para resolución Fork-Choice.";
+            return false;
+        }
+
+        recover_state_from_db();
+        current_height = db_.get_top_height();
+        is_reorg = true;
+    }
+
+    bool success = false;
+    struct ReorgGuard {
+        bool& is_reorg;
+        bool& success;
+        Block& local_top;
+        BlockchainDB& db;
+        Vault& vault;
+        Node& node;
+        ~ReorgGuard() {
+            if (is_reorg && !success) {
+                // Restaurar atómicamente el bloque previo con todas sus imágenes de clave y UTXOs (P1-05)
+                std::vector<KeyImage> spent_images;
+                for (const auto& tx : local_top.txs) {
+                    spent_images.push_back(tx.ring_sig.key_image);
+                }
+                for (const auto& wdr : local_top.withdrawals) {
+                    spent_images.push_back(wdr.key_image);
+                }
+
+                std::vector<OneTimeOutput> new_utxos;
+                for (const auto& out : local_top.deposit_outputs) {
+                    new_utxos.push_back(out);
+                }
+                for (const auto& tx : local_top.txs) {
+                    for (const auto& out : tx.outputs) {
+                        new_utxos.push_back(out);
+                    }
+                }
+                for (const auto& out : local_top.withdrawal_outputs) {
+                    new_utxos.push_back(out);
+                }
+
+                db.commit_block(local_top, vault, new_utxos, spent_images);
+                node.recover_state_from_db();
+            }
+        }
+    } reorg_guard{is_reorg, success, local_top, db_, vault_, *this};
+
+    auto fail = [&](const std::string& msg) -> bool {
+        error_msg = msg;
         return false;
+    };
+
+    if (block.header.height != current_height + 1) {
+        return fail("Altura de bloque inválida: se esperaba " + std::to_string(current_height + 1) +
+                    ", recibido " + std::to_string(block.header.height));
     }
 
     Hash256 current_top_hash = db_.get_top_block_hash();
     if (std::memcmp(block.header.prev_block_hash.data(), current_top_hash.data(), 32) != 0) {
-        error_msg = "Hash de bloque previo no coincide con la punta local de la cadena.";
-        return false;
+        return fail("Hash de bloque previo no coincide con la punta local de la cadena.");
     }
 
     Hash256 calculated_root = block.compute_merkle_root();
     if (std::memcmp(block.header.merkle_root.data(), calculated_root.data(), 32) != 0) {
-        error_msg = "Raiz de Merkle invalida en cabecera del bloque.";
-        return false;
+        return fail("Raiz de Merkle invalida en cabecera del bloque.");
     }
 
-    // 0. Autenticación de depósitos y consenso federado P2P (AUD-H0-P0-03)
-    if (!block.deposits.empty() || !authorized_validators_.empty()) {
+    // 0. Autenticación de depósitos y consenso federado P2P (AUD-H0-P0-03 & Auditoría v3: P0-02 Fail-closed y P1-01 Quórum M-de-N)
+    if (!block.deposits.empty()) {
+        // En modo fail-closed, no se aceptan depósitos si la lista de oráculos autorizados está vacía (P0-02)
+        if (authorized_validators_.empty()) {
+            error_msg = "Bloque remoto rechazado: la lista de validadores autorizados está vacía (modo fail-closed requerido para depósitos P0-02).";
+            return false;
+        }
+
+        // Verificar quórum M-de-N de firmas autorizadas (P1-01)
+        size_t valid_quorum = block.header.verify_quorum(authorized_validators_);
+        uint32_t required_quorum = std::max(1U, validator_quorum_threshold_);
+        if (valid_quorum < required_quorum) {
+            error_msg = "Bloque remoto rechazado: quórum insuficiente de oráculos autorizados (P1-01). Se requieren " +
+                        std::to_string(required_quorum) + " firmas válidas, pero se verificaron " +
+                        std::to_string(valid_quorum);
+            return false;
+        }
+    } else if (!authorized_validators_.empty()) {
         if (!block.header.verify_signature()) {
             error_msg = "Bloque remoto rechazado: firma de validador/oráculo inválida o ausente en el encabezado (P0-03).";
             return false;
         }
-        if (!authorized_validators_.empty()) {
-            bool authorized = false;
-            for (const auto& auth_pk : authorized_validators_) {
-                if (sodium_memcmp(auth_pk.data(), block.header.validator_pubkey.data(), 32) == 0) {
-                    authorized = true;
-                    break;
-                }
+        bool authorized = false;
+        for (const auto& auth_pk : authorized_validators_) {
+            if (sodium_memcmp(auth_pk.data(), block.header.validator_pubkey.data(), 32) == 0) {
+                authorized = true;
+                break;
             }
-            if (!authorized) {
-                error_msg = "Bloque remoto rechazado: la clave del validador firmante no está en el conjunto autorizado de oráculos (P0-03).";
-                return false;
-            }
+        }
+        if (!authorized) {
+            error_msg = "Bloque remoto rechazado: la clave del validador firmante no está en el conjunto autorizado de oráculos (P0-03).";
+            return false;
         }
     }
 
@@ -825,29 +971,39 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             return false;
         }
 
-        // 3.3b Si hay cambio, verificar correspondencia biyectiva 1:1 estricta con block.withdrawal_outputs (AUD-H0-04, P0-01)
+        // 3.3b Si hay cambio, verificar correspondencia biyectiva 1:1 estricta y ligadura criptográfica (Auditoría v3 - P1-02)
         Amount expected_change = utxo_amount - wdr.gross_tokens_burned;
         if (expected_change > 0) {
             expected_change_count++;
             bool change_found = false;
             for (size_t oi = 0; oi < block.withdrawal_outputs.size(); ++oi) {
                 if (!output_claimed[oi] && block.withdrawal_outputs[oi].amount == expected_change) {
-                    output_claimed[oi] = true;
-                    change_found = true;
-                    break;
+                    // Verificar que el destino coincida exactamente con la clave de cambio autorizada por el propietario
+                    if (sodium_memcmp(block.withdrawal_outputs[oi].destination_one_time.data(), wdr.change_output_pubkey.data(), 32) == 0) {
+                        output_claimed[oi] = true;
+                        change_found = true;
+                        break;
+                    }
                 }
             }
             if (!change_found) {
-                error_msg = "Retiro rechazado: falta salida de cambio o monto discordante en el bloque.";
+                error_msg = "Retiro rechazado: falta salida de cambio, monto discordante o clave pública no coincide con la prueba DLEQ (P1-02).";
+                return false;
+            }
+        } else {
+            Key256 empty_key{};
+            if (sodium_memcmp(wdr.change_output_pubkey.data(), empty_key.data(), 32) != 0) {
+                error_msg = "Retiro rechazado: retiro sin cambio contiene clave de cambio no nula en el recibo (P1-02).";
                 return false;
             }
         }
 
-        // 3.4 Verificación de prueba matemática de quema (DLEQ)
+        // 3.4 Verificación de prueba matemática de quema (DLEQ) ligando el cambio
         Hash256 burn_msg = RingSignatureEngine::compute_burn_message_hash(
             wdr.order_id,
             wdr.gross_tokens_burned,
-            wdr.destination_address
+            wdr.destination_address,
+            wdr.change_output_pubkey
         );
         if (!RingSignatureEngine::verify_burn_proof(
                 burn_msg,
@@ -924,6 +1080,7 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
     // Persistir atómicamente en LMDB
     db_.commit_block(block, vault_, new_utxos, spent_images);
 
+    success = true;
     return true;
 }
 

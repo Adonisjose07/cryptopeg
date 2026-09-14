@@ -27,7 +27,13 @@ public:
     );
 
     // 1. Compra de cripto con USDT: acuñación 1:1 menos comisión que va al pool + Asentamiento en bloque LMDB
-    DepositReceipt buy_shielded(Amount usdt_gross, const StealthAddress& recipient_address, const std::string& custom_tx_hash = "", uint64_t custom_timestamp = 0);
+    DepositReceipt buy_shielded(
+        Amount usdt_gross,
+        const StealthAddress& recipient_address,
+        const std::string& custom_tx_hash = "",
+        uint64_t custom_timestamp = 0,
+        const std::vector<std::array<uint8_t, 64>>& cosigner_secret_keys = {}
+    );
 
     // 2. Transferencia confidencial RingCT (DKSAP + MLSAG + Señuelos + Key Image) + Asentamiento en bloque LMDB
     ShieldedTransaction transfer_shielded(
@@ -76,12 +82,20 @@ public:
     bool is_deposit_tx_processed(const std::string& tx_hash) const { return db_.is_deposit_tx_processed(tx_hash); }
     const BlockchainDB& get_db() const { return db_; }
 
-    // Gestión de identidad de validador y oráculos autorizados (P0-03)
+    // Gestión de identidad de validador y oráculos autorizados (P0-03 y P1-01 Quórum)
     void set_validator_key(const uint8_t* secret_key_64, const Key256& pub_key_32);
     void add_authorized_validator(const Key256& pub_key_32);
     const Key256& get_validator_pubkey() const { return validator_pubkey_; }
     bool has_validator_key() const { return has_validator_key_; }
     const std::vector<Key256>& get_authorized_validators() const { return authorized_validators_; }
+    uint32_t get_quorum_threshold() const { return validator_quorum_threshold_; }
+    void set_quorum_threshold(uint32_t q) { validator_quorum_threshold_ = q; }
+    bool is_authorized_validator(const Key256& pk) const {
+        for (const auto& auth : authorized_validators_) {
+            if (sodium_memcmp(auth.data(), pk.data(), 32) == 0) return true;
+        }
+        return false;
+    }
 
     const Vault& get_vault() const { return vault_; }
     const std::vector<OneTimeOutput>& get_utxo_pool() const { return utxo_pool_; }
@@ -104,12 +118,14 @@ private:
     std::array<uint8_t, 64> validator_secret_key_{};
     bool has_validator_key_{false};
     std::vector<Key256> authorized_validators_;
+    uint32_t validator_quorum_threshold_{1};
 
     // Seleccionar N-1 señuelos aleatorios del conjunto de outputs con homogeneidad de denominación (AUD-H0-P0-02)
     std::vector<Key256> select_decoys(size_t ring_size, const Key256& real_pubkey, Amount target_amount = 0);
 
     // Inicialización y recuperación desde LMDB
     void init_or_recover_database();
+    void recover_state_from_db();
 };
 
 } // namespace crypto

@@ -17,15 +17,30 @@ DepositReceipt Vault::deposit(Amount usdt_gross, const std::string& custom_tx_ha
     if (usdt_gross == 0) {
         throw std::invalid_argument("El depósito debe ser mayor a 0.");
     }
+    if (usdt_gross > MAX_TRANSACTION_AMOUNT) {
+        throw std::invalid_argument("El monto del depósito excede el límite protocolario MAX_TRANSACTION_AMOUNT.");
+    }
 
-    // Cálculo exacto en punto fijo de la comisión: (Monto * bps) / 10000
-    Amount fee = (usdt_gross * deposit_fee_bps_) / 10000ULL;
-    Amount net_minted = usdt_gross - fee;
+    // Cálculo exacto en punto fijo de la comisión usando 128 bits (Auditoría v3 - P1-04)
+    Amount fee = safe_fee_calc(usdt_gross, deposit_fee_bps_);
+    Amount net_minted = 0;
+    if (!safe_sub_amount(usdt_gross, fee, net_minted)) {
+        throw std::runtime_error("Error aritmético en deducción de comisión de depósito.");
+    }
 
-    // Actualización de balances
-    total_collateral_ += usdt_gross;
-    circulating_supply_ += net_minted;
-    fee_pool_reserve_ += fee;
+    // Actualización segura de balances con comprobación de overflow
+    Amount new_collateral = 0;
+    Amount new_circulating = 0;
+    Amount new_fee_pool = 0;
+    if (!safe_add_amount(total_collateral_, usdt_gross, new_collateral) ||
+        !safe_add_amount(circulating_supply_, net_minted, new_circulating) ||
+        !safe_add_amount(fee_pool_reserve_, fee, new_fee_pool)) {
+        throw std::overflow_error("Desbordamiento aritmético en actualización de balances de bóveda.");
+    }
+
+    total_collateral_ = new_collateral;
+    circulating_supply_ = new_circulating;
+    fee_pool_reserve_ = new_fee_pool;
 
     // Invariante de seguridad
     if (total_collateral_ != (circulating_supply_ + fee_pool_reserve_)) {
@@ -54,23 +69,38 @@ WithdrawalReceipt Vault::request_withdrawal(Amount tokens_gross) {
     if (tokens_gross == 0) {
         throw std::invalid_argument("La cantidad de tokens a retirar debe ser mayor a 0.");
     }
+    if (tokens_gross > MAX_TRANSACTION_AMOUNT) {
+        throw std::invalid_argument("La cantidad a retirar excede el límite protocolario MAX_TRANSACTION_AMOUNT.");
+    }
 
     if (tokens_gross > circulating_supply_) {
         throw std::runtime_error("Fondos insuficientes en suministro circulante para quemar.");
     }
 
-    // Comisión de salida al pool
-    Amount fee = (tokens_gross * withdraw_fee_bps_) / 10000ULL;
-    Amount net_usdt = tokens_gross - fee;
+    // Comisión de salida al pool con aritmética segura de 128 bits (Auditoría v3 - P1-04)
+    Amount fee = safe_fee_calc(tokens_gross, withdraw_fee_bps_);
+    Amount net_usdt = 0;
+    if (!safe_sub_amount(tokens_gross, fee, net_usdt)) {
+        throw std::runtime_error("Error aritmético en cálculo de monto neto de retiro.");
+    }
 
     if (net_usdt > total_collateral_) {
         throw std::runtime_error("Bóveda insolvente: colateral insuficiente.");
     }
 
-    // Quema de tokens y liberación de colateral
-    circulating_supply_ -= tokens_gross;
-    total_collateral_ -= net_usdt;
-    fee_pool_reserve_ += fee; // La comisión queda en el pool dentro de la bóveda
+    // Quema de tokens y liberación de colateral con aritmética comprobada
+    Amount new_circulating = 0;
+    Amount new_collateral = 0;
+    Amount new_fee_pool = 0;
+    if (!safe_sub_amount(circulating_supply_, tokens_gross, new_circulating) ||
+        !safe_sub_amount(total_collateral_, net_usdt, new_collateral) ||
+        !safe_add_amount(fee_pool_reserve_, fee, new_fee_pool)) {
+        throw std::overflow_error("Error aritmético al actualizar balances durante el retiro.");
+    }
+
+    circulating_supply_ = new_circulating;
+    total_collateral_ = new_collateral;
+    fee_pool_reserve_ = new_fee_pool;
 
     // Invariante de solvencia
     if (total_collateral_ != (circulating_supply_ + fee_pool_reserve_)) {
@@ -96,6 +126,9 @@ ClaimReceipt Vault::claim_fees(Amount amount_to_claim, const std::string& destin
     if (amount_to_claim == 0) {
         throw std::invalid_argument("El monto a reclamar de comisiones debe ser mayor a 0.");
     }
+    if (amount_to_claim > MAX_TRANSACTION_AMOUNT) {
+        throw std::invalid_argument("El monto a reclamar excede el límite protocolario MAX_TRANSACTION_AMOUNT.");
+    }
 
     if (destination_address.empty()) {
         throw std::invalid_argument("La dirección de destino de tesorería no puede estar vacía.");
@@ -105,10 +138,16 @@ ClaimReceipt Vault::claim_fees(Amount amount_to_claim, const std::string& destin
         throw std::runtime_error("Monto solicitado excede la reserva disponible en el pool de comisiones.");
     }
 
-    // Deducir del colateral total y de la reserva de comisiones
-    // El suministro circulante de los usuarios permanece 100% intacto y respaldado
-    total_collateral_ -= amount_to_claim;
-    fee_pool_reserve_ -= amount_to_claim;
+    // Deducir del colateral total y de la reserva de comisiones de forma comprobada
+    Amount new_collateral = 0;
+    Amount new_fee_pool = 0;
+    if (!safe_sub_amount(total_collateral_, amount_to_claim, new_collateral) ||
+        !safe_sub_amount(fee_pool_reserve_, amount_to_claim, new_fee_pool)) {
+        throw std::overflow_error("Error aritmético al deducir comisiones de tesorería.");
+    }
+
+    total_collateral_ = new_collateral;
+    fee_pool_reserve_ = new_fee_pool;
 
     // Verificación estricta de solvencia tras el cobro de tesorería
     if (total_collateral_ != (circulating_supply_ + fee_pool_reserve_)) {

@@ -48,11 +48,12 @@ public:
         const RingSignature& signature
     );
 
-    // Hash canónico del mensaje de quema para retiros (AUD-H0-P0-01)
+    // Hash canónico del mensaje de quema para retiros ligando output de cambio (Auditoría v3 - P1-02)
     static Hash256 compute_burn_message_hash(
         const std::string& order_id,
         Amount gross_burned,
-        const std::string& destination_address
+        const std::string& destination_address,
+        const Key256& change_output_pubkey = {}
     );
 
     // Firma de prueba criptográfica de quema DLEQ (AUD-H0-P0-01)
@@ -83,6 +84,7 @@ public:
 
     bool is_spent(const KeyImage& image) const;
     void restore_key_image(const KeyImage& image);
+    void clear() { spent_images_.clear(); }
 
     size_t size() const { return spent_images_.size(); }
 

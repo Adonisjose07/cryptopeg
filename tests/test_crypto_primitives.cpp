@@ -257,10 +257,18 @@ int main() {
         crypto_scalarmult_ed25519_base_noclamp(evil_pub.data(), evil_priv.data());
         CHECK(!crypto::RingSignatureEngine::verify_burn_proof(burn_msg, evil_pub, key_img, c0, s), "Prueba DLEQ con pubkey P alterada debe fallar");
 
-        // Falsificación: firma s alterada
-        crypto::Key256 forged_s = s;
-        forged_s[0] ^= 0x55;
-        CHECK(!crypto::RingSignatureEngine::verify_burn_proof(burn_msg, pub_P, key_img, c0, forged_s), "Prueba DLEQ con s alterado debe fallar");
+        // Verificación de ligadura criptográfica de cambio (Auditoría v3 - P1-02)
+        crypto::Key256 change_key;
+        randombytes_buf(change_key.data(), 32);
+        crypto::Hash256 burn_msg_change = crypto::RingSignatureEngine::compute_burn_message_hash(order_id, gross_burned, destination, change_key);
+        crypto::RingSignatureEngine::sign_burn_proof(burn_msg_change, pub_P, priv_x, key_img, c0, s);
+        CHECK(crypto::RingSignatureEngine::verify_burn_proof(burn_msg_change, pub_P, key_img, c0, s), "Prueba DLEQ con cambio ligado debe ser verificada");
+
+        // Falsificación: clave de cambio alterada
+        crypto::Key256 evil_change_key;
+        randombytes_buf(evil_change_key.data(), 32);
+        crypto::Hash256 forged_change_msg = crypto::RingSignatureEngine::compute_burn_message_hash(order_id, gross_burned, destination, evil_change_key);
+        CHECK(!crypto::RingSignatureEngine::verify_burn_proof(forged_change_msg, pub_P, key_img, c0, s), "Prueba DLEQ con cambio alterado debe fallar (P1-02)");
 
         std::cout << "  [OK] Prueba DLEQ y vectores de ataque de falsificación verificados.\n";
     }
@@ -414,7 +422,83 @@ int main() {
         CHECK(evil_header.verify_signature(), "Firma de evil header es internamente válida");
         CHECK(std::memcmp(evil_header.validator_pubkey.data(), val_pk.data(), 32) != 0, "Evil pubkey no coincide con validador legítimo");
 
-        std::cout << "  [OK] Autenticación criptográfica de cabecera de bloque Ed25519 verificada al 100%.\n";
+        // Verificación de Quórum M-de-N (Auditoría v3 - P1-01)
+        crypto::Key256 val2_pk;
+        std::array<uint8_t, 64> val2_sk;
+        crypto_sign_keypair(val2_pk.data(), val2_sk.data());
+
+        crypto::BlockHeader q_header = header;
+        crypto::Signature64 sig2;
+        crypto::Hash256 q_sh = q_header.signing_hash();
+        crypto_sign_detached(sig2.data(), nullptr, q_sh.data(), 32, val2_sk.data());
+        q_header.add_quorum_signature(val2_pk, sig2);
+
+        std::vector<crypto::Key256> auth_validators = {val_pk, val2_pk};
+        size_t verified_quorum = q_header.verify_quorum(auth_validators);
+        CHECK(verified_quorum == 2, "Quórum 2-de-2 debe ser verificado exitosamente");
+
+        std::cout << "  [OK] Autenticación criptográfica de cabecera de bloque Ed25519 y Quórum verificados al 100%.\n";
+    }
+
+    // -------------------------------------------------------------
+    // TEST 9: Cálculo Seguro de Comisiones con Enteros de 128 bits (P1-04)
+    // -------------------------------------------------------------
+    std::cout << "\n[TEST 9] Cálculo Seguro de Comisiones con Aritmética de 128 bits (safe_fee_calc)...\n";
+    {
+        // Comisión ordinaria: 10,000 USDT con 50 bps (0.5%) = 50 USDT
+        crypto::Amount amt = 10'000 * crypto::USDT_UNIT;
+        crypto::Amount fee = crypto::safe_fee_calc(amt, 50);
+        CHECK(fee == 50 * crypto::USDT_UNIT, "Comisión de 10,000 USDT al 0.5% debe ser 50 USDT");
+
+        // Monto masivo cercano a 2^60 que desbordaría una multiplicación ordinaria en uint64
+        crypto::Amount massive = 100'000'000 * crypto::USDT_UNIT; // 100 millones de USDT
+        crypto::Amount massive_fee = crypto::safe_fee_calc(massive, 100); // 1%
+        CHECK(massive_fee == 1'000'000 * crypto::USDT_UNIT, "Cálculo con 128 bits no debe desbordar");
+
+        // Comprobación de safe_sub_amount
+        crypto::Amount res = 0;
+        CHECK(crypto::safe_sub_amount(100, 40, res) && res == 60, "safe_sub_amount debe restar correctamente");
+        CHECK(!crypto::safe_sub_amount(40, 100, res), "safe_sub_amount debe prevenir underflow retornando false");
+
+        std::cout << "  [OK] Aritmética comprobada en Vault con temporales uint128 y safe_sub_amount verificada.\n";
+    }
+
+    // -------------------------------------------------------------
+    // TEST 10: Certificado Criptográfico de Depósito SHA-256 + Ed25519 (P0-01)
+    // -------------------------------------------------------------
+    std::cout << "\n[TEST 10] Certificado Criptográfico de Depósito (compute_deposit_attestation_hash)...\n";
+    {
+        crypto::Key256 val_pk;
+        std::array<uint8_t, 64> val_sk;
+        crypto_sign_keypair(val_pk.data(), val_sk.data());
+
+        crypto::Key256 view_p, spend_p;
+        randombytes_buf(view_p.data(), 32);
+        randombytes_buf(spend_p.data(), 32);
+
+        std::string tx = "0xArbitrumConfirmedDepositTx999";
+        crypto::Amount gross = 500 * crypto::USDT_UNIT;
+        crypto::Hash256 att_hash = crypto::compute_deposit_attestation_hash(
+            421614ULL, "0x511A31987EF1019a41CBba658935515Dd64d2D18",
+            tx, 0, gross, view_p, spend_p, 12345ULL
+        );
+
+        crypto::Signature64 att_sig;
+        crypto_sign_detached(att_sig.data(), nullptr, att_hash.data(), 32, val_sk.data());
+
+        // Verificación exitosa
+        CHECK(crypto_sign_verify_detached(att_sig.data(), att_hash.data(), 32, val_pk.data()) == 0,
+              "Atestación de depósito firmada por oráculo legítimo debe ser verificada");
+
+        // Falsificación: monto alterado
+        crypto::Hash256 forged_att = crypto::compute_deposit_attestation_hash(
+            421614ULL, "0x511A31987EF1019a41CBba658935515Dd64d2D18",
+            tx, 0, gross + 1, view_p, spend_p, 12345ULL
+        );
+        CHECK(crypto_sign_verify_detached(att_sig.data(), forged_att.data(), 32, val_pk.data()) != 0,
+              "Atestación con monto alterado debe fallar verificación criptográfica");
+
+        std::cout << "  [OK] Certificado criptográfico de depósito con firma Ed25519 verificado al 100%.\n";
     }
 
     std::cout << "\n=================================================================\n";

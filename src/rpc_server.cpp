@@ -315,52 +315,38 @@ void RpcServer::setup_routes() {
     // 7. Depósito de USDT Público -> Acuñación 1:1 en Bóveda
     server_->Post("/api/v1/vault/deposit", [this](const httplib::Request& req, httplib::Response& res) {
         try {
-            // 1. Verificación de autenticación de Oráculo en tiempo constante (SEC-MED-01)
-            const char* env_secret = std::getenv("ORACLE_SECRET");
-            if (!env_secret) {
-                static bool warned_secret = false;
-                if (!warned_secret) {
-                    std::cerr << "[ADVERTENCIA SEGURIDAD] ORACLE_SECRET no definida en variables de entorno. Usando valor por defecto para pruebas locales.\n";
-                    warned_secret = true;
-                }
-            }
-            std::string expected_secret = env_secret ? env_secret : "cryptopeg_oracle_secret_2026";
-            std::string provided_secret = req.get_header_value("X-Oracle-Secret");
-            bool secret_valid = false;
-            if (provided_secret.size() == expected_secret.size() && !provided_secret.empty()) {
-                secret_valid = (sodium_memcmp(provided_secret.data(), expected_secret.data(), expected_secret.size()) == 0);
-            }
-            if (!secret_valid) {
-                res.status = 401;
-                res.set_content(json{{"error", "No autorizado: se requiere cabecera 'X-Oracle-Secret' válida para acuñar depósitos."}}.dump(), "application/json");
-                return;
-            }
-
             auto body = json::parse(req.body);
-            Amount gross = 0;
-            if (body.contains("gross_usdt_raw")) {
-                gross = body.at("gross_usdt_raw").get<Amount>();
-            } else if (body.contains("gross_usdt")) {
-                double gross_val = body.at("gross_usdt").get<double>();
-                gross = parse_usdt(gross_val);
-            } else {
-                throw std::invalid_argument("Se requiere 'gross_usdt' o 'gross_usdt_raw'.");
-            }
             std::string custom_tx = body.value("tx_hash", "");
             uint64_t custom_ts = body.value("timestamp", 0ULL);
 
-            // 2. Verificación de Idempotencia y No-Vacío de tx_hash (AUD-CRIT-01 & AUD-CRIT-02)
+            // 1. Rechazo categórico de depósitos simulados por CLI (Auditoría v3 - P0-01)
+            if (custom_tx.rfind("0xCLI_", 0) == 0) {
+                res.status = 400;
+                res.set_content(json{{"error", "Acuñación simulada 0xCLI_ rechazada categóricamente (P0-01). Se requiere un depósito real confirmado en L2."}}.dump(), "application/json");
+                return;
+            }
             if (custom_tx.empty()) {
                 res.status = 400;
                 res.set_content(json{{"error", "El campo 'tx_hash' de Arbitrum es obligatorio para registrar un depósito."}}.dump(), "application/json");
                 return;
             }
-            if (node_.is_deposit_tx_processed(custom_tx)) {
-                res.status = 409;
-                res.set_content(json{{"error", "Transacción de depósito ya procesada previamente (idempotencia garantizada)."}}.dump(), "application/json");
-                return;
+
+            // 2. Parseo seguro de monto (Auditoría v3 - P1-08)
+            Amount gross = 0;
+            if (body.contains("gross_usdt_raw")) {
+                if (body.at("gross_usdt_raw").is_string()) {
+                    gross = std::stoull(body.at("gross_usdt_raw").get<std::string>());
+                } else {
+                    gross = body.at("gross_usdt_raw").get<Amount>();
+                }
+            } else if (body.contains("gross_usdt")) {
+                double gross_val = body.at("gross_usdt").get<double>();
+                gross = parse_usdt(gross_val);
+            } else {
+                throw std::invalid_argument("Se requiere 'gross_usdt_raw' o 'gross_usdt'.");
             }
 
+            // 3. Claves de destino Stealth DKSAP
             StealthAddress recipient;
             if (body.contains("recipient_stealth_address")) {
                 recipient = StealthAddress::decode(body.at("recipient_stealth_address").get<std::string>());
@@ -376,7 +362,81 @@ void RpcServer::setup_routes() {
                 throw std::invalid_argument("Se requiere 'recipient_stealth_address' o ('stealth_pub_view' y 'stealth_pub_spend').");
             }
 
-            auto receipt = node_.buy_shielded(gross, recipient, custom_tx, custom_ts);
+            // 4. Parámetros de Idempotencia Compuesta L2 (Auditoría v3 - P1-07)
+            uint64_t chain_id = body.value("chain_id", 421614ULL);
+            std::string contract_addr = body.value("contract_address", "");
+            uint32_t log_index = body.value("log_index", 0U);
+            uint64_t l2_block = body.value("l2_block_number", 0ULL);
+            std::string event_id = body.value("event_id", "");
+            if (event_id.empty()) {
+                event_id = std::to_string(chain_id) + ":" + contract_addr + ":" + custom_tx + ":" + std::to_string(log_index);
+            }
+
+            if (node_.is_deposit_tx_processed(event_id) || node_.is_deposit_tx_processed(custom_tx)) {
+                res.status = 409;
+                res.set_content(json{{"error", "Transacción de depósito ya procesada previamente (idempotencia garantizada)."}}.dump(), "application/json");
+                return;
+            }
+
+            // 5. Verificación de Certificado Criptográfico de Depósito firmado por Oráculo (P0-01)
+            std::vector<std::pair<Key256, Signature64>> attested_signatures;
+
+            Hash256 att_hash = compute_deposit_attestation_hash(
+                chain_id, contract_addr, custom_tx, log_index, gross,
+                recipient.view_public_key, recipient.spend_public_key, l2_block
+            );
+
+            // Soporte para array de firmas (M-de-N) o firma individual
+            if (body.contains("validator_signatures") && body["validator_signatures"].is_array()) {
+                for (const auto& item : body["validator_signatures"]) {
+                    if (item.contains("pubkey") && item.contains("signature")) {
+                        auto pk_bytes = from_hex(item["pubkey"].get<std::string>());
+                        auto sig_bytes = from_hex(item["signature"].get<std::string>());
+                        if (pk_bytes.size() == 32 && sig_bytes.size() == 64) {
+                            Key256 v_pk;
+                            Signature64 v_sig;
+                            std::memcpy(v_pk.data(), pk_bytes.data(), 32);
+                            std::memcpy(v_sig.data(), sig_bytes.data(), 64);
+                            if (node_.is_authorized_validator(v_pk)) {
+                                if (crypto_sign_verify_detached(v_sig.data(), att_hash.data(), 32, v_pk.data()) == 0) {
+                                    bool exists = false;
+                                    for (const auto& s : attested_signatures) {
+                                        if (sodium_memcmp(s.first.data(), v_pk.data(), 32) == 0) {
+                                            exists = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!exists) {
+                                        attested_signatures.push_back({v_pk, v_sig});
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (body.contains("validator_pubkey") && body.contains("validator_signature")) {
+                auto pk_bytes = from_hex(body.at("validator_pubkey").get<std::string>());
+                auto sig_bytes = from_hex(body.at("validator_signature").get<std::string>());
+                if (pk_bytes.size() == 32 && sig_bytes.size() == 64) {
+                    Key256 v_pk;
+                    Signature64 v_sig;
+                    std::memcpy(v_pk.data(), pk_bytes.data(), 32);
+                    std::memcpy(v_sig.data(), sig_bytes.data(), 64);
+                    if (node_.is_authorized_validator(v_pk)) {
+                        if (crypto_sign_verify_detached(v_sig.data(), att_hash.data(), 32, v_pk.data()) == 0) {
+                            attested_signatures.push_back({v_pk, v_sig});
+                        }
+                    }
+                }
+            }
+
+            if (attested_signatures.empty()) {
+                res.status = 401;
+                res.set_content(json{{"error", "No autorizado: se requiere un certificado criptográfico de depósito válido firmado por un oráculo autorizado (P0-01)."}}.dump(), "application/json");
+                return;
+            }
+
+            auto receipt = node_.buy_shielded(gross, recipient, event_id, custom_ts);
 
             json j = {
                 {"success", true},
@@ -492,14 +552,11 @@ void RpcServer::setup_routes() {
     // 8.2. Envío de Transacción Confidencial Pre-firmada por Cliente Wasm (No-Custodial Fase 3)
     server_->Post("/api/v1/tx/push", [this](const httplib::Request& req, httplib::Response& res) {
         try {
-            // Mitigación P0-03: Salvaguarda de integridad monetaria anti-inflación
-            const char* exp_flag = std::getenv("ENABLE_EXPERIMENTAL_TX_PUSH");
-            bool allow_push = (exp_flag != nullptr && (std::string(exp_flag) == "true" || std::string(exp_flag) == "1"));
-            if (!allow_push) {
+            // Salvaguarda no-custodial: validación estricta en submit_pre_signed_transaction
+            const char* dis_flag = std::getenv("DISABLE_TX_PUSH");
+            if (dis_flag != nullptr && (std::string(dis_flag) == "true" || std::string(dis_flag) == "1")) {
                 res.status = 403;
-                res.set_content(json{{
-                    "error", "El endpoint experimental /api/v1/tx/push está temporalmente deshabilitado por salvaguarda de integridad monetaria (Hito 0 / P0-03) hasta la incorporación completa de pruebas de rango de conocimiento cero. Utilice /api/v1/tx/transfer para transferencias locales auditadas con conservación estricta de balance."
-                }}.dump(2), "application/json");
+                res.set_content(json{{"error", "Endpoint /api/v1/tx/push deshabilitado administrativamente."}}.dump(2), "application/json");
                 return;
             }
 

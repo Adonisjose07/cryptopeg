@@ -10,6 +10,11 @@ Este documento define las reglas de colaboración y los mandatos de seguridad ob
 > **REGLA DE ORO DE SEGURIDAD:**
 > Siempre que se modifique, añada o refactorice código relacionado con la **blockchain, el protocolo, la criptografía o los smart contracts**, es **ESTRICTAMENTE OBLIGATORIO** invocar la revisión adversarial del subagente `security_auditor` (o `blockchain_security_auditor`) sobre el **código actual modificado (working tree / cambios locales)** antes de considerar la tarea terminada, generar el walkthrough final o dar por válidos los cambios.
 
+> [!WARNING]
+> **REGLA DE ORO DE CONVERGENCIA PREVIA AL BUILD (NO REBUILD PREMATURO):**
+> **Está ESTRICTAMENTE PROHIBIDO ejecutar reconstrucciones (rebuild automático de Docker, compilación pesada de imágenes o contenedores) si todavía no se ha completado el loop de revisión y escaneo con los agentes supervisores y expertos.**
+> Todo lo que se pueda escanear, refactorizar, auditar y mejorar en el código debe realizarse directamente sobre el código fuente (*working tree*). Se pierde tiempo valioso en rebuilds repetitivos si el código aún tiene observaciones pendientes de los auditores. La reconstrucción de Docker y la ejecución de binarios solo debe iniciarse una vez que el loop de revisión adversarial haya concluido favorablemente y las correcciones estén consolidadas en el código.
+
 ### Archivos y Componentes Sujetos a Revisión Obligatoria
 
 La invocación del auditor es mandatoria si se toca cualquiera de los siguientes componentes:
@@ -110,7 +115,7 @@ Por tanto:
   4. Si puede haber colisiones, replay o divergencias.
   5. Si ese mecanismo introduce algún coste de privacidad o linkabilidad.
 - Si detectas un trade-off entre determinismo de consenso y privacidad, descríbelo como tal y propone una alternativa que conserve **AMBAS propiedades**, en vez de recomendar simplemente eliminar el determinismo.
-- Aplica el mismo criterio al resto del sistema: **primero determina qué problema intentaba resolver la implementación y después evalúa si lo resuelve de forma segura**. No asumas que una construcción poco convencional es un error únicamente porque difiere de Bitcoin, Ethereum, Monero u otros protocolos.
+- Aplica el mismo criterio al resto del sistema: **primero determina qué problema intentaba resolver la implementación y después evalúa si lo resuelve de forma segura**. No asumas que una construcción poco convencional es un error únicamente porque difiere de Bitcoin, Ethereum u otros protocolos de privacidad criptográfica.
 
 > **Principio Innegociable:**
 > *La auditoría debe cuestionar las decisiones de diseño, pero no ignorar sus requisitos. Una corrección propuesta no es válida si elimina la vulnerabilidad a costa de romper una propiedad necesaria del protocolo, como el consenso determinista entre oráculos.*

@@ -260,14 +260,16 @@ bool RingSignatureEngine::verify(
 Hash256 RingSignatureEngine::compute_burn_message_hash(
     const std::string& order_id,
     Amount gross_burned,
-    const std::string& destination_address
+    const std::string& destination_address,
+    const Key256& change_output_pubkey
 ) {
     crypto_generichash_state state;
     crypto_generichash_init(&state, nullptr, 0, 32);
-    crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>("BURN_PROOF_V1"), 13);
+    crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>("BURN_PROOF_V2"), 13);
     crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>(order_id.data()), order_id.size());
     crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>(&gross_burned), sizeof(gross_burned));
     crypto_generichash_update(&state, reinterpret_cast<const uint8_t*>(destination_address.data()), destination_address.size());
+    crypto_generichash_update(&state, change_output_pubkey.data(), change_output_pubkey.size());
     Hash256 h;
     crypto_generichash_final(&state, h.data(), 32);
     return h;

@@ -19,9 +19,15 @@ static uint64_t current_timestamp() {
 
 static std::string normalize_url(const std::string& url) {
     if (url.empty()) return "";
+    if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0) {
+        return ""; // Solo permitir esquemas seguros HTTP y HTTPS para prevenir SSRF
+    }
     std::string clean = url;
     if (clean.back() == '/') {
         clean.pop_back();
+    }
+    for (char c : clean) {
+        if (c <= 32 || c == 127) return "";
     }
     return clean;
 }

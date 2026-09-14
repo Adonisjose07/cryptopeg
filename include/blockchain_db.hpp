@@ -45,6 +45,8 @@ public:
         const std::vector<KeyImage>& spent_images = {}
     );
 
+    bool rollback_top_block();
+
 private:
     void init_top_height();
 

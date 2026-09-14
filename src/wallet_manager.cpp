@@ -94,8 +94,7 @@ bool WalletManager::sync(std::string& error_msg) {
 
         json scan_req = {
             {"view_private_key", to_hex(wallet_->view_private_key)},
-            {"spend_public_key", to_hex(wallet_->spend_public_key)},
-            {"spend_private_key", to_hex(wallet_->spend_private_key)}
+            {"spend_public_key", to_hex(wallet_->spend_public_key)}
         };
 
         auto res = cli.Post("/api/v1/wallet/scan", scan_req.dump(), "application/json");
@@ -138,45 +137,16 @@ bool WalletManager::deposit(Amount gross_usdt, std::string& out_tx_hash, std::st
         return false;
     }
 
-    try {
-        httplib::Client cli(daemon_url_.c_str());
-        double gross_val = static_cast<double>(gross_usdt) / 1000000.0;
-
-        // Generar identificador único de tx para idempotencia
-        Key256 rand_tx;
-        randombytes_buf(rand_tx.data(), rand_tx.size());
-        std::string mock_tx = "0xCLI_" + to_hex(rand_tx);
-
-        json dep_req = {
-            {"gross_usdt", gross_val},
-            {"recipient_stealth_address", wallet_->get_public_address().encode()},
-            {"tx_hash", mock_tx}
-        };
-
-        const char* env_secret = std::getenv("ORACLE_SECRET");
-        std::string secret = env_secret ? env_secret : "cryptopeg_oracle_secret_2026";
-        httplib::Headers headers = {
-            {"X-Oracle-Secret", secret}
-        };
-
-        auto res = cli.Post("/api/v1/vault/deposit", headers, dep_req.dump(), "application/json");
-        if (!res || res->status != 200) {
-            error_msg = res ? res->body : "Fallo de conexión";
-            return false;
-        }
-
-        auto data = json::parse(res->body);
-        out_tx_hash = data["tx_hash"].get<std::string>();
-
-        // Sincronizar automáticamente tras depósito
-        std::string sync_err;
-        sync(sync_err);
-
-        return true;
-    } catch (const std::exception& e) {
-        error_msg = e.what();
+    if (!wallet_) {
+        error_msg = "Billetera no cargada.";
         return false;
     }
+
+    // Auditoría v3 - P0-01: Los depósitos deben originarse exclusivamente mediante el contrato Vault en Arbitrum L2
+    error_msg = "Los depósitos directos simulados desde la CLI han sido deshabilitados por seguridad (P0-01). "
+                "Para depositar fondos respaldados 1:1, envía USDT al contrato CryptoPegVault en Arbitrum L2 invocando "
+                "deposit(amount, stealthViewKey, stealthSpendKey) con tu dirección stealth: " + wallet_->get_public_address().encode();
+    return false;
 }
 
 bool WalletManager::transfer(
@@ -316,6 +286,9 @@ bool WalletManager::withdraw(
 void WalletManager::close_wallet() {
     is_loaded_ = false;
     name_.clear();
+    if (!mnemonic_.empty()) {
+        sodium_memzero(mnemonic_.data(), mnemonic_.size());
+    }
     mnemonic_.clear();
     wallet_.reset();
     balance_ = 0;

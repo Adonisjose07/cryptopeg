@@ -323,6 +323,202 @@ int main() {
         bool accepted_unauth = node2.apply_remote_block(fake_deposit_block, err_unauth);
         assert(!accepted_unauth);
         std::cout << "  [OK] Depósito P2P firmado por validador no autorizado rechazado: " << err_unauth << "\n";
+
+        // -> [TEST ADVERSARIAL P0-02] Modo Fail-Closed en lista blanca vacía
+        std::cout << "\n  -> [TEST ADVERSARIAL P0-02] Modo Fail-Closed: Depósito P2P con lista de validadores vacía...\n";
+        crypto::Node fail_closed_node(50, 50, "./test_fail_closed_lmdb");
+        std::string err_fc;
+        bool fc_accepted = fail_closed_node.apply_remote_block(fake_deposit_block, err_fc);
+        assert(!fc_accepted);
+        assert(err_fc.find("fail-closed") != std::string::npos);
+        std::cout << "  [OK] Modo fail-closed activado: depósito rechazado ante lista de validadores vacía: " << err_fc << "\n";
+        cleanup_test_dir("./test_fail_closed_lmdb");
+
+        // -> [TEST ADVERSARIAL P1-01] Quórum Federado M-de-N
+        std::cout << "\n  -> [TEST ADVERSARIAL P1-01] Quórum M-de-N (2-de-3 requerido)...\n";
+        crypto::Key256 val1_pk, val2_pk, val3_pk;
+        std::array<uint8_t, 64> val1_sk, val2_sk, val3_sk;
+        crypto_sign_keypair(val1_pk.data(), val1_sk.data());
+        crypto_sign_keypair(val2_pk.data(), val2_sk.data());
+        crypto_sign_keypair(val3_pk.data(), val3_sk.data());
+
+        node2.add_authorized_validator(val1_pk);
+        node2.add_authorized_validator(val2_pk);
+        node2.add_authorized_validator(val3_pk);
+        node2.set_quorum_threshold(2); // Requiere 2 firmas independientes
+
+        fake_deposit_block.header.sign(val1_sk.data(), val1_pk); // 1 sola firma
+        std::string err_q1;
+        bool q1_ok = node2.apply_remote_block(fake_deposit_block, err_q1);
+        assert(!q1_ok);
+        assert(err_q1.find("quórum insuficiente") != std::string::npos);
+        std::cout << "  [OK] Bloque con 1 firma rechazado por quórum insuficiente: " << err_q1 << "\n";
+
+        // Añadir segunda firma válida
+        crypto::Signature64 sig2;
+        crypto_sign_detached(sig2.data(), nullptr, fake_deposit_block.header.signing_hash().data(), 32, val2_sk.data());
+        fake_deposit_block.header.add_quorum_signature(val2_pk, sig2);
+        std::string err_q2;
+        bool q2_ok = node2.apply_remote_block(fake_deposit_block, err_q2);
+        assert(q2_ok);
+        std::cout << "  [OK] Bloque con quórum 2-de-3 alcanzado aceptado y minado con éxito.\n";
+
+        // -> [TEST ADVERSARIAL P1-02] Sustitución maliciosa de clave de cambio en retiro
+        std::cout << "\n  -> [TEST ADVERSARIAL P1-02] Inyección de retiro con clave de cambio sustituida...\n";
+        crypto::Block bad_change_block;
+        bad_change_block.header.height = node2.get_blockchain_height() + 1;
+        bad_change_block.header.prev_block_hash = node2.get_top_block_hash();
+        bad_change_block.header.timestamp = 1773276000ULL;
+
+        crypto::WithdrawalReceipt evil_wdr;
+        evil_wdr.order_id = "ORD-EVIL-CHANGE-999";
+        evil_wdr.gross_tokens_burned = 100 * crypto::USDT_UNIT;
+        evil_wdr.fee_to_pool = 500'000ULL;
+        evil_wdr.net_usdt_to_tumble = 99'500'000ULL;
+        evil_wdr.destination_address = "0xAttackerDest";
+        evil_wdr.burned_utxo_pubkey = fake_out.destination_one_time;
+
+        // Clave legítima de cambio autorizada por el dueño
+        crypto::Key256 legit_change_pk;
+        randombytes_buf(legit_change_pk.data(), 32);
+        evil_wdr.change_output_pubkey = legit_change_pk;
+
+        // Firma DLEQ legítima del dueño sobre legit_change_pk
+        crypto::Hash256 evil_burn_hash = crypto::RingSignatureEngine::compute_burn_message_hash(
+            evil_wdr.order_id, evil_wdr.gross_tokens_burned, evil_wdr.destination_address, evil_wdr.change_output_pubkey
+        );
+        crypto::RingSignatureEngine::sign_burn_proof(
+            evil_burn_hash, dummy_wallet.spend_public_key, dummy_wallet.spend_private_key,
+            evil_wdr.key_image, evil_wdr.burn_signature_c0, evil_wdr.burn_signature_s
+        );
+
+        bad_change_block.withdrawals.push_back(evil_wdr);
+
+        // El productor malicioso intenta desviar el cambio a su propia clave atacante
+        crypto::OneTimeOutput hijacked_change = fake_out;
+        hijacked_change.amount = fake_out.amount - evil_wdr.gross_tokens_burned;
+        randombytes_buf(hijacked_change.destination_one_time.data(), 32); // Clave diferente a legit_change_pk
+        bad_change_block.withdrawal_outputs.push_back(hijacked_change);
+
+        bad_change_block.header.merkle_root = bad_change_block.compute_merkle_root();
+        bad_change_block.header.sign(val1_sk.data(), val1_pk);
+        std::string err_hijack;
+        bool hijack_accepted = node2.apply_remote_block(bad_change_block, err_hijack);
+        assert(!hijack_accepted);
+        assert(err_hijack.find("P1-02") != std::string::npos || err_hijack.find("prueba DLEQ") != std::string::npos);
+        std::cout << "  [OK] Sustitución maliciosa de cambio bloqueada categóricamente: " << err_hijack << "\n";
+
+        // -> [TEST ADVERSARIAL P1-05] Regla Determinista Fork-Choice y Reorganización Canónica
+        std::cout << "\n  -> [TEST ADVERSARIAL P1-05] Regla Fork-Choice y Reorganización de Punta (P1-05)...\n";
+        uint64_t top_h = node2.get_blockchain_height();
+        crypto::Hash256 orig_top_hash = node2.get_top_block_hash();
+
+        // 1. Crear bloque competidor en la misma altura con menor quórum (1 firma vs 2 firmas del bloque local)
+        crypto::Block competitor_low_q;
+        competitor_low_q.header.height = top_h;
+        crypto::Block current_top_blk;
+        assert(node2.get_block(top_h, current_top_blk));
+        competitor_low_q.header.prev_block_hash = current_top_blk.header.prev_block_hash;
+        competitor_low_q.header.timestamp = current_top_blk.header.timestamp + 10;
+
+        crypto::DepositReceipt comp_dep;
+        comp_dep.gross_usdt_deposited = 500 * crypto::USDT_UNIT;
+        comp_dep.fee_to_pool = 2500000ULL;
+        comp_dep.net_shielded_tokens_minted = 497500000ULL;
+        comp_dep.tx_hash = "0xcompetitor_tx_hash_alternative";
+        comp_dep.recipient_view_pub = dummy_wallet.view_public_key;
+        comp_dep.recipient_spend_pub = dummy_wallet.spend_public_key;
+
+        crypto::Hash256 comp_seed;
+        crypto_generichash(comp_seed.data(), 32, reinterpret_cast<const uint8_t*>(comp_dep.tx_hash.data()), comp_dep.tx_hash.size(), nullptr, 0);
+        auto comp_out = crypto::StealthProtocol::create_one_time_output(dummy_wallet.get_public_address(), comp_dep.net_shielded_tokens_minted, &comp_seed);
+        competitor_low_q.deposits.push_back(comp_dep);
+        competitor_low_q.deposit_outputs.push_back(comp_out);
+        competitor_low_q.header.merkle_root = competitor_low_q.compute_merkle_root();
+        competitor_low_q.header.sign(val1_sk.data(), val1_pk); // Solo 1 firma
+
+        std::string err_fc_low;
+        bool low_q_acc = node2.apply_remote_block(competitor_low_q, err_fc_low);
+        assert(!low_q_acc);
+        assert(err_fc_low.find("Fork-Choice") != std::string::npos);
+        assert(node2.get_top_block_hash() == orig_top_hash);
+        std::cout << "  [OK] Bloque competidor con menor quórum rechazado por Fork-Choice: " << err_fc_low << "\n";
+
+        // 2. Equipar al bloque competidor con MAYOR quórum (3 firmas vs 2 del local)
+        crypto::Signature64 comp_sig2, comp_sig3;
+        crypto_sign_detached(comp_sig2.data(), nullptr, competitor_low_q.header.signing_hash().data(), 32, val2_sk.data());
+        crypto_sign_detached(comp_sig3.data(), nullptr, competitor_low_q.header.signing_hash().data(), 32, val3_sk.data());
+        competitor_low_q.header.add_quorum_signature(val2_pk, comp_sig2);
+        competitor_low_q.header.add_quorum_signature(val3_pk, comp_sig3);
+
+        std::string err_fc_high;
+        bool high_q_acc = node2.apply_remote_block(competitor_low_q, err_fc_high);
+        assert(high_q_acc);
+        assert(node2.get_blockchain_height() == top_h);
+        assert(crypto::to_hex(node2.get_top_block_hash()) == crypto::to_hex(competitor_low_q.hash()));
+        std::cout << "  [OK] Reorganización de punta completada por Fork-Choice (3 firmas > 2 firmas). Nuevo hash aceptado.\n";
+
+        // 3. Probar buy_shielded con Quórum M-de-N (P1-01)
+        std::cout << "\n  -> [TEST ADVERSARIAL P1-01] Node::buy_shielded con umbral de quórum >= 2...\n";
+        bool threw_quorum = false;
+        try {
+            // Sin firmas adicionales cuando el umbral es 2 debe fallar
+            node2.buy_shielded(100 * crypto::USDT_UNIT, dummy_wallet.get_public_address(), "0xinsufficient_quorum_tx");
+        } catch (const std::exception& e) {
+            threw_quorum = true;
+            std::cout << "  [OK] buy_shielded rechazó minado sin quórum requerido: " << e.what() << "\n";
+        }
+        assert(threw_quorum);
+
+        // Ahora pasando una segunda firma válida de cosignatario val2_sk
+        auto bs_receipt = node2.buy_shielded(
+            100 * crypto::USDT_UNIT,
+            dummy_wallet.get_public_address(),
+            "0xvalid_quorum_tx_deposit",
+            0,
+            {val2_sk}
+        );
+        assert(node2.get_blockchain_height() == top_h + 1);
+        std::cout << "  [OK] buy_shielded con cosignatario adicional minó exitosamente Bloque #" << node2.get_blockchain_height() << "\n";
+
+        // 4. Test Adversarial ReorgGuard: Bloque competidor con mayor quórum pero con validación fallida
+        std::cout << "\n  -> [TEST ADVERSARIAL P1-05] ReorgGuard: Bloque competidor malicioso con mayor quórum pero inválido...\n";
+        uint64_t safe_top_h = node2.get_blockchain_height();
+        crypto::Hash256 safe_top_hash = node2.get_top_block_hash();
+        crypto::Block safe_top_block;
+        assert(node2.get_block(safe_top_h, safe_top_block));
+
+        crypto::Block evil_reorg_block;
+        evil_reorg_block.header.height = safe_top_h;
+        evil_reorg_block.header.prev_block_hash = safe_top_block.header.prev_block_hash;
+        evil_reorg_block.header.timestamp = safe_top_block.header.timestamp + 20;
+
+        // Crear depósito malicioso sin salida correspondiente (para forzar fallo de validación)
+        crypto::DepositReceipt evil_dep;
+        evil_dep.gross_usdt_deposited = 1000 * crypto::USDT_UNIT;
+        evil_dep.tx_hash = "0xevil_reorg_tx";
+        evil_reorg_block.deposits.push_back(evil_dep);
+        // NO agregamos deposit_output -> mismatch entre deposits y deposit_outputs
+        evil_reorg_block.header.merkle_root = evil_reorg_block.compute_merkle_root();
+
+        // Equipar con 3 firmas válidas (mayor quórum que el local)
+        evil_reorg_block.header.sign(val1_sk.data(), val1_pk);
+        crypto::Signature64 esig2, esig3;
+        crypto_sign_detached(esig2.data(), nullptr, evil_reorg_block.header.signing_hash().data(), 32, val2_sk.data());
+        crypto_sign_detached(esig3.data(), nullptr, evil_reorg_block.header.signing_hash().data(), 32, val3_sk.data());
+        evil_reorg_block.header.add_quorum_signature(val2_pk, esig2);
+        evil_reorg_block.header.add_quorum_signature(val3_pk, esig3);
+
+        std::string err_evil_reorg;
+        bool evil_reorg_accepted = node2.apply_remote_block(evil_reorg_block, err_evil_reorg);
+        assert(!evil_reorg_accepted);
+        std::cout << "  [OK] Bloque competidor inválido rechazado: " << err_evil_reorg << "\n";
+
+        // Verificar que ReorgGuard restauró el bloque seguro localmente
+        assert(node2.get_blockchain_height() == safe_top_h);
+        assert(crypto::to_hex(node2.get_top_block_hash()) == crypto::to_hex(safe_top_hash));
+        assert(node2.audit_system());
+        std::cout << "  [OK] ReorgGuard restauró el bloque legítimo, la solvencia contable y los UTXOs sin pérdida.\n";
     }
 
     cleanup_test_dir(test_db_path);

@@ -22,6 +22,12 @@ int main() {
     cleanup_dir(test_db);
 
     crypto::Node node(50, 50, test_db);
+    crypto::Key256 val_pk;
+    std::array<uint8_t, 64> val_sk;
+    crypto_sign_keypair(val_pk.data(), val_sk.data());
+    node.set_validator_key(val_sk.data(), val_pk);
+    node.add_authorized_validator(val_pk);
+
     crypto::RpcServer rpc(node, "127.0.0.1", 8081);
 
     std::cout << "[PASO 1] Iniciando RpcServer asíncrono en http://127.0.0.1:8081...\n";
@@ -63,27 +69,66 @@ int main() {
     std::cout << "  [OK] Billetera Alice generada: " << alice_j["stealth_address"].get<std::string>().substr(0, 24) << "...\n";
     std::cout << "  [OK] Billetera Bob generada  : " << bob_j["stealth_address"].get<std::string>().substr(0, 24) << "...\n";
 
-    // 4. Test Deposit for Alice
-    std::cout << "[PASO 5] Probando POST /api/v1/vault/deposit (1,000 USDT para Alice)...\n";
+    // 4. Test Deposit for Alice con Certificado Criptográfico (P0-01)
+    std::cout << "[PASO 5] Probando POST /api/v1/vault/deposit con Certificado Criptográfico (P0-01)...\n";
+    std::string tx_hash = "0xArbitrumSepoliaDepositTxAlice01";
+    uint32_t log_idx = 0;
+    crypto::Amount gross_raw = 1000 * crypto::USDT_UNIT;
+    auto alice_stealth = crypto::StealthAddress::decode(alice_j["stealth_address"]);
+    crypto::Hash256 att_hash = crypto::compute_deposit_attestation_hash(
+        421614ULL, "0x511A31987EF1019a41CBba658935515Dd64d2D18",
+        tx_hash, log_idx, gross_raw,
+        alice_stealth.view_public_key, alice_stealth.spend_public_key, 100ULL
+    );
+    crypto::Signature64 att_sig;
+    crypto_sign_detached(att_sig.data(), nullptr, att_hash.data(), 32, val_sk.data());
+
     json dep_req = {
-        {"gross_usdt", 1000.0},
+        {"chain_id", 421614},
+        {"contract_address", "0x511A31987EF1019a41CBba658935515Dd64d2D18"},
+        {"gross_usdt_raw", std::to_string(gross_raw)},
         {"recipient_stealth_address", alice_j["stealth_address"]},
-        {"tx_hash", "0xArbitrumSepoliaDepositTxAlice01"}
+        {"tx_hash", tx_hash},
+        {"log_index", log_idx},
+        {"l2_block_number", 100},
+        {"validator_pubkey", crypto::to_hex(val_pk)},
+        {"validator_signature", crypto::to_hex(att_sig)}
     };
-    httplib::Headers oracle_headers = {
-        {"X-Oracle-Secret", "cryptopeg_oracle_secret_2026"}
-    };
-    res = cli.Post("/api/v1/vault/deposit", oracle_headers, dep_req.dump(), "application/json");
+
+    // 4.1 Petición sin firma criptográfica debe ser rechazada con 401 (P0-01)
+    json unauth_dep = dep_req;
+    unauth_dep.erase("validator_signature");
+    auto res_unauth = cli.Post("/api/v1/vault/deposit", unauth_dep.dump(), "application/json");
+    assert(res_unauth && res_unauth->status == 401);
+    std::cout << "  [OK] Depósito sin firma criptográfica rechazado con 401 (P0-01).\n";
+
+    // 4.1b Petición que omite completamente ambos campos de validador (bypass check P0-01)
+    json bypass_dep = dep_req;
+    bypass_dep.erase("validator_pubkey");
+    bypass_dep.erase("validator_signature");
+    auto res_bypass = cli.Post("/api/v1/vault/deposit", bypass_dep.dump(), "application/json");
+    assert(res_bypass && res_bypass->status == 401);
+    std::cout << "  [OK] Depósito omitiendo credenciales rechazado con 401 (P0-01 bypass mitigado).\n";
+
+    // 4.2 Petición simulada 0xCLI_ debe ser rechazada con 400 (P0-01)
+    json fake_cli_dep = dep_req;
+    fake_cli_dep["tx_hash"] = "0xCLI_fake_attempt";
+    auto res_fake = cli.Post("/api/v1/vault/deposit", fake_cli_dep.dump(), "application/json");
+    assert(res_fake && res_fake->status == 400);
+    std::cout << "  [OK] Depósito simulado 0xCLI_ rechazado con 400 (P0-01).\n";
+
+    // 4.3 Petición legítima con certificado Ed25519
+    res = cli.Post("/api/v1/vault/deposit", dep_req.dump(), "application/json");
     assert(res && res->status == 200);
     auto dep_res = json::parse(res->body);
     assert(dep_res["success"] == true);
     assert(dep_res["block_height"] == 1);
-    std::cout << "  [OK] Depósito procesado. Minado en Bloque #1. Tokens acuñados: " << dep_res["net_shielded_minted"] << "\n";
+    std::cout << "  [OK] Depósito procesado con certificado Ed25519. Minado en Bloque #1. Tokens: " << dep_res["net_shielded_minted"] << "\n";
 
-    // Probar Idempotencia: segundo intento con el mismo tx_hash debe retornar 409
-    auto res_replay = cli.Post("/api/v1/vault/deposit", oracle_headers, dep_req.dump(), "application/json");
+    // 4.4 Probar Idempotencia: segundo intento con el mismo tx_hash/log_index debe retornar 409
+    auto res_replay = cli.Post("/api/v1/vault/deposit", dep_req.dump(), "application/json");
     assert(res_replay && res_replay->status == 409);
-    std::cout << "  [OK] Idempotencia verificada: intento de replay rechazado con código 409.\n";
+    std::cout << "  [OK] Idempotencia compuesta verificada: intento de replay rechazado con código 409.\n";
 
     // 5. Test Wallet Scan for Alice (View-Key Scanning)
     std::cout << "[PASO 6] Probando POST /api/v1/wallet/scan (Escaneo con View-Key de Alice)...\n";

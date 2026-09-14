@@ -97,12 +97,12 @@ int main() {
     bob.create_wallet("Bob");
     std::cout << "  [Bob]   Creada con dirección: " << bob.get_address().encode() << "\n";
 
-    // 4.1 Alice deposita 100 USDT en la bóveda
-    std::cout << "\n  -> Alice deposita 100 USDT colaterales...\n";
-    std::string tx_hash, err;
-    bool dep_ok = alice.deposit(100 * crypto::USDT_UNIT, tx_hash, err);
-    assert(dep_ok);
-    assert(!tx_hash.empty());
+    // 4.1 Alice recibe depósito colateral de 100 USDT respaldado 1:1 en L2
+    std::cout << "\n  -> Alice deposita 100 USDT colaterales en Arbitrum L2...\n";
+    std::string tx_hash = "0xL2DepositConfirmedAlice01", err;
+    node.buy_shielded(100 * crypto::USDT_UNIT, alice.get_address(), tx_hash, 0);
+    bool alice_sync = alice.sync(err);
+    assert(alice_sync);
     // 100 USDT bruto - 0.5% fee = 99.5 USDT neto
     assert(alice.get_balance() == 99'500'000ULL);
     assert(alice.get_utxos().size() == 1);

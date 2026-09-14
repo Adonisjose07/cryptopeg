@@ -501,4 +501,151 @@ void BlockchainDB::commit_block(
     }
 }
 
+bool BlockchainDB::rollback_top_block() {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!env_ || top_height_ == 0) return false;
+
+    MDB_txn* txn = nullptr;
+    int rc = mdb_txn_begin(env_, nullptr, 0, &txn);
+    if (rc != 0) return false;
+
+    try {
+        uint64_t be_top = to_big_endian_64(top_height_);
+        MDB_val k_h;
+        k_h.mv_size = sizeof(be_top);
+        k_h.mv_data = &be_top;
+
+        // 1. Obtener el bloque actual en la punta
+        MDB_val v_block;
+        rc = mdb_get(txn, dbi_blocks_, &k_h, &v_block);
+        if (rc != 0) {
+            mdb_txn_abort(txn);
+            return false;
+        }
+
+        Block top_block = Block::deserialize(static_cast<const uint8_t*>(v_block.mv_data), v_block.mv_size);
+        Hash256 b_hash = top_block.hash();
+
+        // 2. Eliminar de dbi_blocks_
+        rc = mdb_del(txn, dbi_blocks_, &k_h, nullptr);
+        if (rc != 0) { mdb_txn_abort(txn); return false; }
+
+        // 3. Eliminar de dbi_block_index_
+        MDB_val k_hash;
+        k_hash.mv_size = b_hash.size();
+        k_hash.mv_data = b_hash.data();
+        mdb_del(txn, dbi_block_index_, &k_hash, nullptr);
+
+        // 4. Eliminar imágenes de clave gastadas por este bloque
+        for (const auto& tx : top_block.txs) {
+            KeyImage c_ki = canonical_key_image(tx.ring_sig.key_image);
+            MDB_val k_ki;
+            k_ki.mv_size = c_ki.size();
+            k_ki.mv_data = const_cast<uint8_t*>(c_ki.data());
+            mdb_del(txn, dbi_key_images_, &k_ki, nullptr);
+        }
+        for (const auto& wdr : top_block.withdrawals) {
+            KeyImage c_ki = canonical_key_image(wdr.key_image);
+            MDB_val k_ki;
+            k_ki.mv_size = c_ki.size();
+            k_ki.mv_data = const_cast<uint8_t*>(c_ki.data());
+            mdb_del(txn, dbi_key_images_, &k_ki, nullptr);
+        }
+
+        // 5. Eliminar UTXOs creados en este bloque
+        for (const auto& out : top_block.deposit_outputs) {
+            MDB_val k_u;
+            k_u.mv_size = out.destination_one_time.size();
+            k_u.mv_data = const_cast<uint8_t*>(out.destination_one_time.data());
+            mdb_del(txn, dbi_utxos_, &k_u, nullptr);
+        }
+        for (const auto& tx : top_block.txs) {
+            for (const auto& out : tx.outputs) {
+                MDB_val k_u;
+                k_u.mv_size = out.destination_one_time.size();
+                k_u.mv_data = const_cast<uint8_t*>(out.destination_one_time.data());
+                mdb_del(txn, dbi_utxos_, &k_u, nullptr);
+            }
+        }
+        for (const auto& out : top_block.withdrawal_outputs) {
+            MDB_val k_u;
+            k_u.mv_size = out.destination_one_time.size();
+            k_u.mv_data = const_cast<uint8_t*>(out.destination_one_time.data());
+            mdb_del(txn, dbi_utxos_, &k_u, nullptr);
+        }
+
+        // 6. Eliminar depósitos procesados
+        for (const auto& dep : top_block.deposits) {
+            if (!dep.tx_hash.empty()) {
+                MDB_val k_dtx;
+                k_dtx.mv_size = dep.tx_hash.size();
+                k_dtx.mv_data = const_cast<char*>(dep.tx_hash.data());
+                mdb_del(txn, dbi_deposit_txs_, &k_dtx, nullptr);
+            }
+        }
+
+        // 7. Actualizar altura y hash de la nueva punta (top_height_ - 1)
+        uint64_t new_height = top_height_ - 1;
+        uint64_t be_new = to_big_endian_64(new_height);
+        MDB_val k_new;
+        k_new.mv_size = sizeof(be_new);
+        k_new.mv_data = &be_new;
+        MDB_val v_prev;
+        if (mdb_get(txn, dbi_blocks_, &k_new, &v_prev) == 0) {
+            Block prev_block = Block::deserialize(static_cast<const uint8_t*>(v_prev.mv_data), v_prev.mv_size);
+            top_hash_ = prev_block.hash();
+        } else {
+            std::memset(top_hash_.data(), 0, 32);
+        }
+        top_height_ = new_height;
+
+        // Actualizar metadata "top_height"
+        std::string meta_th = "top_height";
+        MDB_val k_mth, v_mth;
+        k_mth.mv_size = meta_th.size();
+        k_mth.mv_data = const_cast<char*>(meta_th.data());
+        v_mth.mv_size = sizeof(be_new);
+        v_mth.mv_data = &be_new;
+        mdb_put(txn, dbi_metadata_, &k_mth, &v_mth, 0);
+
+        // 8. Reconstruir y revertir metadata "vault_state" exactamente hasta new_height (Auditoría v3 - P1-05)
+        Vault prev_vault;
+        for (uint64_t h = 1; h <= new_height; ++h) {
+            uint64_t be_h = to_big_endian_64(h);
+            MDB_val k_vh, v_vb;
+            k_vh.mv_size = sizeof(be_h);
+            k_vh.mv_data = &be_h;
+            if (mdb_get(txn, dbi_blocks_, &k_vh, &v_vb) == 0) {
+                Block b = Block::deserialize(static_cast<const uint8_t*>(v_vb.mv_data), v_vb.mv_size);
+                for (const auto& dep : b.deposits) {
+                    prev_vault.deposit(dep.gross_usdt_deposited, dep.tx_hash);
+                }
+                for (const auto& wdr : b.withdrawals) {
+                    prev_vault.request_withdrawal(wdr.gross_tokens_burned);
+                }
+            }
+        }
+
+        std::string meta_vs = "vault_state";
+        MDB_val k_mvs, v_mvs;
+        k_mvs.mv_size = meta_vs.size();
+        k_mvs.mv_data = const_cast<char*>(meta_vs.data());
+
+        ByteWriter vw;
+        vw.write_u64(prev_vault.get_total_collateral());
+        vw.write_u64(prev_vault.get_circulating_shielded_supply());
+        vw.write_u64(prev_vault.get_fee_pool_reserve());
+        auto vb = vw.take_bytes();
+        v_mvs.mv_size = vb.size();
+        v_mvs.mv_data = vb.data();
+        mdb_put(txn, dbi_metadata_, &k_mvs, &v_mvs, 0);
+
+        rc = mdb_txn_commit(txn);
+        return (rc == 0);
+    } catch (...) {
+        mdb_txn_abort(txn);
+        return false;
+    }
+}
+
 } // namespace crypto

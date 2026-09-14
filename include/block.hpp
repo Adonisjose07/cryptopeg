@@ -35,6 +35,7 @@ void serialize_withdrawal(ByteWriter& w, const WithdrawalReceipt& wdr);
 WithdrawalReceipt deserialize_withdrawal(ByteReader& r);
 
 struct BlockHeader {
+    uint32_t version{PROTOCOL_VERSION};
     uint64_t height{0};
     Hash256 prev_block_hash{};
     Hash256 merkle_root{};
@@ -42,11 +43,15 @@ struct BlockHeader {
     uint64_t nonce{0};
     Key256 validator_pubkey{};
     Signature64 validator_signature{};
+    std::vector<Key256> quorum_pubkeys{};
+    std::vector<Signature64> quorum_signatures{};
 
     Hash256 hash() const;
     Hash256 signing_hash() const;
     void sign(const uint8_t* secret_key_64, const Key256& pub_key_32);
     bool verify_signature() const;
+    void add_quorum_signature(const Key256& pub_key_32, const Signature64& sig);
+    size_t verify_quorum(const std::vector<Key256>& authorized_set) const;
 };
 
 void serialize_header(ByteWriter& w, const BlockHeader& h);

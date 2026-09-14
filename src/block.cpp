@@ -142,6 +142,7 @@ void serialize_withdrawal(ByteWriter& w, const WithdrawalReceipt& wdr) {
     w.write_array(wdr.burned_utxo_pubkey);
     w.write_array(wdr.burn_signature_c0);
     w.write_array(wdr.burn_signature_s);
+    w.write_array(wdr.change_output_pubkey);
 }
 
 WithdrawalReceipt deserialize_withdrawal(ByteReader& r) {
@@ -153,12 +154,7 @@ WithdrawalReceipt deserialize_withdrawal(ByteReader& r) {
     if (r.remaining() > 4) {
         wdr.destination_address = r.read_string();
     } else {
-        // Compatibilidad hacia atrás para bloques históricos previos
-        if (wdr.order_id == "ORD-6a11f5bef01a84280a6ec5cd09a64d10") {
-            wdr.destination_address = "0x9d59867EfE155406f637F028997866f252dcc72c";
-        } else {
-            wdr.destination_address = "";
-        }
+        wdr.destination_address = "";
     }
     if (r.remaining() >= 32) {
         wdr.key_image = r.read_array<32>();
@@ -174,11 +170,17 @@ WithdrawalReceipt deserialize_withdrawal(ByteReader& r) {
         wdr.burn_signature_c0.fill(0);
         wdr.burn_signature_s.fill(0);
     }
+    if (r.remaining() >= 32) {
+        wdr.change_output_pubkey = r.read_array<32>();
+    } else {
+        wdr.change_output_pubkey.fill(0);
+    }
     return wdr;
 }
 
-// 6. BlockHeader
+// 6. BlockHeader (Auditoría v3 - P1-01 y P1-03: Versionado explícito y Quórum M-de-N)
 void serialize_header(ByteWriter& w, const BlockHeader& h) {
+    w.write_u32(h.version);
     w.write_u64(h.height);
     w.write_array(h.prev_block_hash);
     w.write_array(h.merkle_root);
@@ -186,33 +188,49 @@ void serialize_header(ByteWriter& w, const BlockHeader& h) {
     w.write_u64(h.nonce);
     w.write_array(h.validator_pubkey);
     w.write_array(h.validator_signature);
+    w.write_u32(static_cast<uint32_t>(h.quorum_pubkeys.size()));
+    for (size_t i = 0; i < h.quorum_pubkeys.size(); ++i) {
+        w.write_array(h.quorum_pubkeys[i]);
+        if (i < h.quorum_signatures.size()) {
+            w.write_array(h.quorum_signatures[i]);
+        } else {
+            Signature64 empty_sig{};
+            w.write_array(empty_sig);
+        }
+    }
 }
 
 BlockHeader deserialize_header(ByteReader& r) {
     BlockHeader h;
+    h.version = r.read_u32();
     h.height = r.read_u64();
     h.prev_block_hash = r.read_array<32>();
     h.merkle_root = r.read_array<32>();
     h.timestamp = r.read_u64();
     h.nonce = r.read_u64();
-    if (r.remaining() >= 96) {
-        h.validator_pubkey = r.read_array<32>();
-        h.validator_signature = r.read_array<64>();
-    } else {
-        h.validator_pubkey.fill(0);
-        h.validator_signature.fill(0);
+    h.validator_pubkey = r.read_array<32>();
+    h.validator_signature = r.read_array<64>();
+    if (h.version >= 3 && r.remaining() >= 4) {
+        uint32_t q_count = r.read_u32();
+        if (q_count > 64) {
+            throw std::runtime_error("Número de firmas de quórum excede el límite de seguridad (64).");
+        }
+        for (uint32_t i = 0; i < q_count; ++i) {
+            h.quorum_pubkeys.push_back(r.read_array<32>());
+            h.quorum_signatures.push_back(r.read_array<64>());
+        }
     }
     return h;
 }
 
 Hash256 BlockHeader::signing_hash() const {
     ByteWriter w;
+    w.write_u32(version);
     w.write_u64(height);
     w.write_array(prev_block_hash);
     w.write_array(merkle_root);
     w.write_u64(timestamp);
     w.write_u64(nonce);
-    w.write_array(validator_pubkey);
     Hash256 h;
     crypto_generichash(h.data(), 32, w.get_bytes().data(), w.get_bytes().size(), nullptr, 0);
     return h;
@@ -226,6 +244,15 @@ void BlockHeader::sign(const uint8_t* secret_key_64, const Key256& pub_key_32) {
         sh.data(), 32,
         secret_key_64
     );
+    add_quorum_signature(pub_key_32, validator_signature);
+}
+
+void BlockHeader::add_quorum_signature(const Key256& pub_key_32, const Signature64& sig) {
+    for (const auto& pk : quorum_pubkeys) {
+        if (sodium_memcmp(pk.data(), pub_key_32.data(), 32) == 0) return;
+    }
+    quorum_pubkeys.push_back(pub_key_32);
+    quorum_signatures.push_back(sig);
 }
 
 bool BlockHeader::verify_signature() const {
@@ -241,6 +268,53 @@ bool BlockHeader::verify_signature() const {
         sh.data(), 32,
         validator_pubkey.data()
     ) == 0);
+}
+
+size_t BlockHeader::verify_quorum(const std::vector<Key256>& authorized_set) const {
+    if (authorized_set.empty()) return 0;
+    Hash256 sh = signing_hash();
+    std::vector<Key256> verified_keys;
+
+    // 1. Verificar firma de cabecera primaria
+    if (verify_signature()) {
+        for (const auto& auth_pk : authorized_set) {
+            if (sodium_memcmp(auth_pk.data(), validator_pubkey.data(), 32) == 0) {
+                verified_keys.push_back(validator_pubkey);
+                break;
+            }
+        }
+    }
+
+    // 2. Verificar firmas adicionales del vector de quórum
+    size_t count = std::min(quorum_pubkeys.size(), quorum_signatures.size());
+    for (size_t i = 0; i < count; ++i) {
+        const auto& pk = quorum_pubkeys[i];
+        const auto& sig = quorum_signatures[i];
+
+        bool is_auth = false;
+        for (const auto& auth_pk : authorized_set) {
+            if (sodium_memcmp(auth_pk.data(), pk.data(), 32) == 0) {
+                is_auth = true;
+                break;
+            }
+        }
+        if (!is_auth) continue;
+
+        bool already_counted = false;
+        for (const auto& vk : verified_keys) {
+            if (sodium_memcmp(vk.data(), pk.data(), 32) == 0) {
+                already_counted = true;
+                break;
+            }
+        }
+        if (already_counted) continue;
+
+        if (crypto_sign_verify_detached(sig.data(), sh.data(), 32, pk.data()) == 0) {
+            verified_keys.push_back(pk);
+        }
+    }
+
+    return verified_keys.size();
 }
 
 Hash256 BlockHeader::hash() const {

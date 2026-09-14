@@ -33,6 +33,13 @@ int main() {
     crypto::Node node_a(50, 50, db_a);
     crypto::Node node_b(50, 50, db_b);
 
+    crypto::Key256 val_pk;
+    std::array<uint8_t, 64> val_sk;
+    crypto_sign_keypair(val_pk.data(), val_sk.data());
+    node_a.set_validator_key(val_sk.data(), val_pk);
+    node_a.add_authorized_validator(val_pk);
+    node_b.add_authorized_validator(val_pk);
+
     crypto::P2PManager p2p_a(node_a, "http://127.0.0.1:8085", "node-alpha");
     crypto::P2PManager p2p_b(node_b, "http://127.0.0.1:8086", "node-beta");
 
@@ -147,6 +154,7 @@ int main() {
     // -------------------------------------------------------------------------
     std::cout << "\n[PASO 5] Probando Initial Block Download (IBD) con nuevo Nodo Gamma (8087)...\n";
     crypto::Node node_c(50, 50, db_c);
+    node_c.add_authorized_validator(val_pk);
     assert(node_c.get_blockchain_height() == 0); // Empieza solo con génesis
 
     crypto::P2PManager p2p_c(node_c, "http://127.0.0.1:8087", "node-gamma");
@@ -176,6 +184,7 @@ int main() {
     cleanup_dir(db_d);
 
     crypto::Node node_d(50, 50, db_d);
+    node_d.add_authorized_validator(val_pk);
     assert(node_d.get_blockchain_height() == 0); // Empieza solo con génesis
 
     crypto::P2PManager p2p_d(node_d, "http://127.0.0.1:8088", "node-delta");

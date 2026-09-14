@@ -25,6 +25,7 @@ struct WithdrawalReceipt {
     Key256 burned_utxo_pubkey{};
     Key256 burn_signature_c0{};
     Key256 burn_signature_s{};
+    Key256 change_output_pubkey{};
 };
 
 struct ClaimReceipt {

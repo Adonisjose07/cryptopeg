@@ -231,4 +231,50 @@ describe("Oracle Listener & Relayer Unit Tests", function () {
       expect(computedHash).to.equal(recomputedHash);
     });
   });
+
+  describe("Auditoría v3: Confirmaciones L2, Idempotencia Compuesta y Precisión Strings", function () {
+    it("debe respetar la ventana de confirmaciones L2 (CONFIRMATION_BLOCKS) (P1-06)", function () {
+      const currentBlock = 1000;
+      const CONFIRMATION_BLOCKS = 12;
+      const confirmedBlock = Math.max(0, currentBlock - CONFIRMATION_BLOCKS);
+
+      expect(confirmedBlock).to.equal(988);
+
+      let lastChecked = 980;
+      const fromBlock = lastChecked + 1;
+      const toBlock = confirmedBlock;
+
+      expect(fromBlock).to.equal(981);
+      expect(toBlock).to.equal(988);
+      expect(toBlock).to.be.lessThan(currentBlock);
+    });
+
+    it("debe procesar múltiples eventos en la misma transacción mediante identificador compuesto eventId (P1-07)", function () {
+      const chainId = 421614;
+      const vault = "0x511A31987EF1019a41CBba658935515Dd64d2D18".toLowerCase();
+      const sharedTx = "0xMultiDepositBatchTx123";
+
+      const event1 = { transactionHash: sharedTx, index: 0 };
+      const event2 = { transactionHash: sharedTx, index: 1 };
+
+      const id1 = `${chainId}:${vault}:${event1.transactionHash}:${event1.index}`;
+      const id2 = `${chainId}:${vault}:${event2.transactionHash}:${event2.index}`;
+
+      expect(id1).to.not.equal(id2);
+
+      const processedSet = new Set();
+      processedSet.add(id1);
+
+      expect(processedSet.has(id1)).to.be.true;
+      expect(processedSet.has(id2)).to.be.false; // No se ignora el segundo evento
+    });
+
+    it("debe preservar precisión en montos transmitidos como string sin límite JS 2^53 (P1-08)", function () {
+      const hugeAtomicAmount = 9007199254740992000n; // > 2^53
+      const strVal = hugeAtomicAmount.toString();
+
+      expect(strVal).to.equal("9007199254740992000");
+      expect(typeof strVal).to.equal("string");
+    });
+  });
 });

@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const { ethers } = require("ethers");
 const path = require("path");
 const fs = require("fs");
@@ -8,7 +9,49 @@ const ARBITRUM_RPC_URL = process.env.ARBITRUM_SEPOLIA_RPC_URL || process.env.ARB
 const VAULT_ADDRESS = process.env.USDT_VAULT_ADDRESS || "0x511A31987EF1019a41CBba658935515Dd64d2D18";
 const NODE_DAEMON_URL = process.env.NODE_DAEMON_URL || "http://127.0.0.1:8080";
 const POLL_INTERVAL_MS = parseInt(process.env.ORACLE_POLL_INTERVAL_MS || "5000");
+const L2_CONFIRMATION_BLOCKS = parseInt(process.env.L2_CONFIRMATION_BLOCKS || "12");
 const STATE_FILE = process.env.RELAYER_STATE_FILE || path.resolve(__dirname, "../../data/relayer_state.json");
+
+// Helper para derivar par de claves Ed25519 para atestaciones criptográficas de depósito (Auditoría v3 - P0-01)
+function getEd25519KeyPair() {
+  const seedHex = process.env.VALIDATOR_ED25519_PRIVKEY || process.env.VALIDATOR_PRIVATE_KEY || process.env.TESTNET_PRIVATE_KEY || "";
+  let seed;
+  if (seedHex.replace(/^0x/, "").length === 64) {
+    seed = Buffer.from(seedHex.replace(/^0x/, ""), "hex");
+  } else {
+    seed = crypto.createHash("sha256").update(seedHex || "cryptopeg_testnet_validator_seed").digest();
+  }
+  const privKey = crypto.createPrivateKey({
+    key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]),
+    format: "der",
+    type: "pkcs8"
+  });
+  const pubKey = crypto.createPublicKey(privKey);
+  const rawPubHex = pubKey.export({ type: "spki", format: "der" }).subarray(-32).toString("hex");
+  return { privKey, pubKey, rawPubHex };
+}
+
+function computeDepositAttestationHash(chainId, contractAddress, txHash, logIndex, grossRawStr, viewKeyHex, spendKeyHex, l2BlockNumber) {
+  const hash = crypto.createHash("sha256");
+  hash.update(Buffer.from("DEPOSIT_ATTESTATION_V1", "utf8"));
+  const bufChain = Buffer.alloc(8);
+  bufChain.writeBigUInt64LE(BigInt(chainId));
+  hash.update(bufChain);
+  hash.update(Buffer.from(contractAddress, "utf8"));
+  hash.update(Buffer.from(txHash, "utf8"));
+  const bufLog = Buffer.alloc(4);
+  bufLog.writeUInt32LE(Number(logIndex));
+  hash.update(bufLog);
+  const bufGross = Buffer.alloc(8);
+  bufGross.writeBigUInt64LE(BigInt(grossRawStr));
+  hash.update(bufGross);
+  hash.update(Buffer.from(viewKeyHex, "hex"));
+  hash.update(Buffer.from(spendKeyHex, "hex"));
+  const bufBlock = Buffer.alloc(8);
+  bufBlock.writeBigUInt64LE(BigInt(l2BlockNumber));
+  hash.update(bufBlock);
+  return hash.digest();
+}
 
 // ABI bidireccional para CryptoPegVault (compatible con V1 y V2 EIP-712)
 const VAULT_ABI = [
@@ -168,10 +211,11 @@ async function main() {
 
     try {
       const currentBlock = await provider.getBlockNumber();
-      if (currentBlock <= lastCheckedL2Block) return;
+      const confirmedBlock = Math.max(0, currentBlock - L2_CONFIRMATION_BLOCKS);
+      if (confirmedBlock <= lastCheckedL2Block) return;
 
       const fromBlock = lastCheckedL2Block + 1;
-      const toBlock = currentBlock;
+      const toBlock = confirmedBlock;
 
       let events;
       try {
@@ -192,41 +236,62 @@ async function main() {
         return indexA - indexB;
       });
 
+      const network = await provider.getNetwork();
+      const chainId = Number(network.chainId);
+
       for (const event of events) {
         const txHash = event.transactionHash;
-        if (processedTxHashes.has(txHash)) continue;
+        const logIndex = event.index !== undefined ? event.index : (event.logIndex !== undefined ? event.logIndex : 0);
+        const eventId = `${chainId}:${VAULT_ADDRESS.toLowerCase()}:${txHash}:${logIndex}`;
+        if (processedTxHashes.has(eventId) || processedTxHashes.has(txHash)) continue;
 
-        const grossUnits = Number(event.args.grossAmount);
+        const grossRawStr = event.args.grossAmount.toString();
         const grossUSDT = parseFloat(ethers.formatUnits(event.args.grossAmount, 6));
         const viewKeyHex = event.args.stealthPubView.replace("0x", "");
         const spendKeyHex = event.args.stealthPubSpend.replace("0x", "");
 
-        console.log(`\n[ORACLE-INBOUND] -> Nuevo depósito detectado en Arbitrum Sepolia!`);
+        console.log(`\n[ORACLE-INBOUND] -> Nuevo depósito confirmado en Arbitrum!`);
         console.log(`                 Tx Hash:  ${txHash}`);
-        console.log(`                 Monto:    ${grossUSDT.toFixed(6)} USDT (${grossUnits} micro-USDT)`);
+        console.log(`                 Log Index:${logIndex}`);
+        console.log(`                 Monto:    ${grossUSDT.toFixed(6)} USDT (${grossRawStr} micro-USDT)`);
         console.log(`                 View Key: ${viewKeyHex.substring(0, 16)}...`);
         console.log(`                 Spend Key:${spendKeyHex.substring(0, 16)}...`);
+
+        // Generar atestación criptográfica Ed25519 (Auditoría v3 - P0-01)
+        const { privKey, rawPubHex } = getEd25519KeyPair();
+        const attestationHash = computeDepositAttestationHash(
+          chainId, VAULT_ADDRESS, txHash, logIndex, grossRawStr, viewKeyHex, spendKeyHex, event.blockNumber
+        );
+        const signature = crypto.sign(null, attestationHash, privKey);
+        const sigHex = signature.toString("hex");
 
         let processedSuccessfully = false;
         try {
           const res = await fetch(`${NODE_DAEMON_URL}/api/v1/vault/deposit`, {
             method: "POST",
             headers: {
-              "Content-Type": "application/json",
-              "X-Oracle-Secret": process.env.ORACLE_SECRET || "cryptopeg_oracle_secret_2026"
+              "Content-Type": "application/json"
             },
             body: JSON.stringify({
+              chain_id: chainId,
+              contract_address: VAULT_ADDRESS,
+              tx_hash: txHash,
+              log_index: logIndex,
+              event_id: eventId,
               gross_usdt: grossUSDT,
-              gross_usdt_raw: grossUnits,
+              gross_usdt_raw: grossRawStr,
               stealth_pub_view: viewKeyHex,
               stealth_pub_spend: spendKeyHex,
-              tx_hash: txHash,
-              timestamp: Number(event.args.timestamp)
+              l2_block_number: event.blockNumber,
+              timestamp: Number(event.args.timestamp),
+              validator_pubkey: rawPubHex,
+              validator_signature: sigHex
             })
           });
 
           const data = await res.json();
           if (res.ok || res.status === 409) {
+            processedTxHashes.add(eventId);
             processedTxHashes.add(txHash);
             processedSuccessfully = true;
             if (res.ok) {
