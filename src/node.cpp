@@ -202,7 +202,13 @@ DepositReceipt Node::buy_shielded(
         }
     }
 
-    db_.commit_block(block, vault_, {utxo}, {});
+    try {
+        db_.commit_block(block, vault_, {utxo}, {});
+    } catch (...) {
+        // LMDB is the source of truth: never leave a successful-looking mint only in RAM.
+        try { recover_state_from_db(); } catch (...) {}
+        throw;
+    }
 
     if (on_block_mined_) {
         on_block_mined_(block);
@@ -376,7 +382,12 @@ ShieldedTransaction Node::transfer_shielded(
         block.header.sign(validator_secret_key_.data(), validator_pubkey_);
     }
 
-    db_.commit_block(block, vault_, new_outputs, {sig.key_image});
+    try {
+        db_.commit_block(block, vault_, new_outputs, {sig.key_image});
+    } catch (...) {
+        try { recover_state_from_db(); } catch (...) {}
+        throw;
+    }
 
     if (on_block_mined_) {
         on_block_mined_(block);
@@ -492,7 +503,12 @@ TumblingPlan Node::withdraw_shielded(
         block.header.sign(validator_secret_key_.data(), validator_pubkey_);
     }
 
-    db_.commit_block(block, vault_, new_outs, {img});
+    try {
+        db_.commit_block(block, vault_, new_outs, {img});
+    } catch (...) {
+        try { recover_state_from_db(); } catch (...) {}
+        throw;
+    }
 
     if (on_block_mined_) {
         on_block_mined_(block);
@@ -753,7 +769,7 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             error_msg = "Deposito invalido: monto bruto debe ser mayor a cero.";
             return false;
         }
-        Amount expected_fee = (dep.gross_usdt_deposited * vault_.get_deposit_fee_bps()) / 10000;
+        Amount expected_fee = safe_fee_calc(dep.gross_usdt_deposited, vault_.get_deposit_fee_bps());
         Amount expected_net = dep.gross_usdt_deposited - expected_fee;
         if (dep.fee_to_pool != expected_fee || dep.net_shielded_tokens_minted != expected_net) {
             error_msg = "Comision o acuniacion neta de deposito no coincide con los parametros de la boveda.";
@@ -992,7 +1008,7 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
         }
 
         // 3.1 Conservación económica y comisiones de retiro
-        Amount expected_fee = (wdr.gross_tokens_burned * vault_.get_withdraw_fee_bps()) / 10000;
+        Amount expected_fee = safe_fee_calc(wdr.gross_tokens_burned, vault_.get_withdraw_fee_bps());
         Amount expected_net = wdr.gross_tokens_burned - expected_fee;
         if (wdr.fee_to_pool != expected_fee || wdr.net_usdt_to_tumble != expected_net) {
             error_msg = "Comision o monto neto de retiro no coincide con los parametros de la boveda.";
@@ -1274,7 +1290,12 @@ ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransactio
         block.header.sign(validator_secret_key_.data(), validator_pubkey_);
     }
 
-    db_.commit_block(block, vault_, tx.outputs, {tx.ring_sig.key_image});
+    try {
+        db_.commit_block(block, vault_, tx.outputs, {tx.ring_sig.key_image});
+    } catch (...) {
+        try { recover_state_from_db(); } catch (...) {}
+        throw;
+    }
 
     if (on_block_mined_) {
         on_block_mined_(block);

@@ -10,14 +10,15 @@ const VAULT_ADDRESS = process.env.USDT_VAULT_ADDRESS || "0x511A31987EF1019a41CBb
 const NODE_DAEMON_URL = process.env.NODE_DAEMON_URL || "http://127.0.0.1:8080";
 const POLL_INTERVAL_MS = parseInt(process.env.ORACLE_POLL_INTERVAL_MS || "5000");
 const L2_CONFIRMATION_BLOCKS = parseInt(process.env.L2_CONFIRMATION_BLOCKS || "12");
+const ORACLE_START_BLOCK = parseInt(process.env.ORACLE_START_BLOCK || "0");
 const CONFIDENTIAL_CHAIN_CONFIRMATIONS = parseInt(process.env.CONFIDENTIAL_CHAIN_CONFIRMATIONS || "6");
 const STATE_FILE = process.env.RELAYER_STATE_FILE || path.resolve(__dirname, "../../data/relayer_state.json");
 
 // Helper para derivar par de claves Ed25519 para atestaciones criptográficas de depósito (Auditoría v3 - P0-01)
 function getEd25519KeyPair() {
-  const seedHex = process.env.VALIDATOR_ED25519_PRIVKEY || process.env.VALIDATOR_PRIVATE_KEY || process.env.TESTNET_PRIVATE_KEY || "";
+  const seedHex = process.env.VALIDATOR_ED25519_PRIVKEY || "";
   if (!seedHex) {
-    throw new Error("[ORACLE SECURITY CRITICAL] Clave de validador no configurada en VALIDATOR_ED25519_PRIVKEY o VALIDATOR_PRIVATE_KEY. Abortando por seguridad (V4-08).");
+    throw new Error("[ORACLE SECURITY CRITICAL] VALIDATOR_ED25519_PRIVKEY dedicada no configurada. No se permite reutilizar claves ECDSA/L2 para atestaciones Ed25519.");
   }
   let seed;
   if (seedHex.replace(/^0x/, "").length === 64) {
@@ -201,8 +202,14 @@ async function main() {
 
   try {
     const currentL2 = await provider.getBlockNumber();
-    if (lastCheckedL2Block === 0 || lastCheckedL2Block > currentL2) {
-      lastCheckedL2Block = currentL2;
+    if (lastCheckedL2Block === 0) {
+      if (!Number.isInteger(ORACLE_START_BLOCK) || ORACLE_START_BLOCK <= 0) {
+        throw new Error("ORACLE_START_BLOCK debe configurarse al bloque de despliegue/checkpoint del Vault para evitar omitir depósitos históricos.");
+      }
+      lastCheckedL2Block = ORACLE_START_BLOCK - 1;
+    }
+    if (lastCheckedL2Block > currentL2) {
+      throw new Error(`Cursor L2 persistido/configurado (${lastCheckedL2Block}) está por encima de la punta actual (${currentL2}).`);
     }
     console.log(`[ORACLE] Conectado exitosamente.`);
     console.log(` -> Monitoreando depósitos desde bloque L2 #${lastCheckedL2Block}`);
@@ -251,7 +258,7 @@ async function main() {
         const txHash = event.transactionHash;
         const logIndex = event.index !== undefined ? event.index : (event.logIndex !== undefined ? event.logIndex : 0);
         const eventId = `${chainId}:${VAULT_ADDRESS.toLowerCase()}:${txHash}:${logIndex}`;
-        if (processedTxHashes.has(eventId) || processedTxHashes.has(txHash)) continue;
+        if (processedTxHashes.has(eventId)) continue;
 
         const grossRawStr = event.args.grossAmount.toString();
         const grossUSDT = parseFloat(ethers.formatUnits(event.args.grossAmount, 6));
@@ -286,7 +293,6 @@ async function main() {
               tx_hash: txHash,
               log_index: logIndex,
               event_id: eventId,
-              gross_usdt: grossUSDT,
               gross_usdt_raw: grossRawStr,
               stealth_pub_view: viewKeyHex,
               stealth_pub_spend: spendKeyHex,
@@ -300,7 +306,6 @@ async function main() {
           const data = await res.json();
           if (res.ok || res.status === 409) {
             processedTxHashes.add(eventId);
-            processedTxHashes.add(txHash);
             processedSuccessfully = true;
             if (res.ok) {
               console.log(`[ORACLE-INBOUND] [OK] Acuñado en Blockchain Privada! Bloque #${data.block_height} | Net Minted: ${data.net_shielded_minted} | Fee: ${data.fee_to_pool}`);

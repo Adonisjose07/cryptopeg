@@ -2,9 +2,18 @@
 #include <cstring>
 #include <chrono>
 #include <stdexcept>
+#include <algorithm>
 #include <sodium.h>
 
 namespace crypto {
+
+namespace {
+constexpr uint32_t MAX_BLOCK_TRANSACTIONS = 10000;
+constexpr uint32_t MAX_BLOCK_DEPOSITS = 10000;
+constexpr uint32_t MAX_BLOCK_WITHDRAWALS = 10000;
+constexpr uint32_t MAX_BLOCK_OUTPUTS = 20000;
+constexpr uint32_t MAX_TX_OUTPUTS = 256;
+}
 
 // 1. OneTimeOutput
 void serialize_output(ByteWriter& w, const OneTimeOutput& out) {
@@ -96,6 +105,9 @@ ShieldedTransaction deserialize_tx(ByteReader& r) {
     tx.tx_hash = r.read_array<32>();
     tx.ring_sig = deserialize_ring_sig(r);
     uint32_t out_count = r.read_u32();
+    if (out_count > MAX_TX_OUTPUTS) {
+        throw std::runtime_error("Numero de outputs de transaccion excede el limite protocolario.");
+    }
     tx.outputs.reserve(out_count);
     for (uint32_t i = 0; i < out_count; ++i) {
         tx.outputs.push_back(deserialize_output(r));
@@ -251,8 +263,18 @@ void BlockHeader::add_quorum_signature(const Key256& pub_key_32, const Signature
     for (const auto& pk : quorum_pubkeys) {
         if (sodium_memcmp(pk.data(), pub_key_32.data(), 32) == 0) return;
     }
-    quorum_pubkeys.push_back(pub_key_32);
-    quorum_signatures.push_back(sig);
+
+    // Canonicalizar por clave publica para que el mismo conjunto M-de-N produzca
+    // exactamente el mismo header/hash independientemente del orden de llegada.
+    size_t pos = 0;
+    while (pos < quorum_pubkeys.size() &&
+           std::lexicographical_compare(
+               quorum_pubkeys[pos].begin(), quorum_pubkeys[pos].end(),
+               pub_key_32.begin(), pub_key_32.end())) {
+        ++pos;
+    }
+    quorum_pubkeys.insert(quorum_pubkeys.begin() + static_cast<std::ptrdiff_t>(pos), pub_key_32);
+    quorum_signatures.insert(quorum_signatures.begin() + static_cast<std::ptrdiff_t>(pos), sig);
 }
 
 bool BlockHeader::verify_signature() const {
@@ -456,18 +478,27 @@ Block Block::deserialize(const uint8_t* data, size_t len) {
     block.header = deserialize_header(r);
 
     uint32_t tx_count = r.read_u32();
+    if (tx_count > MAX_BLOCK_TRANSACTIONS) {
+        throw std::runtime_error("Cantidad de transacciones excede el limite protocolario del bloque.");
+    }
     block.txs.reserve(tx_count);
     for (uint32_t i = 0; i < tx_count; ++i) {
         block.txs.push_back(deserialize_tx(r));
     }
 
     uint32_t dep_count = r.read_u32();
+    if (dep_count > MAX_BLOCK_DEPOSITS) {
+        throw std::runtime_error("Cantidad de depositos excede el limite protocolario del bloque.");
+    }
     block.deposits.reserve(dep_count);
     for (uint32_t i = 0; i < dep_count; ++i) {
         block.deposits.push_back(deserialize_deposit(r));
     }
 
     uint32_t wdr_count = r.read_u32();
+    if (wdr_count > MAX_BLOCK_WITHDRAWALS) {
+        throw std::runtime_error("Cantidad de retiros excede el limite protocolario del bloque.");
+    }
     block.withdrawals.reserve(wdr_count);
     for (uint32_t i = 0; i < wdr_count; ++i) {
         block.withdrawals.push_back(deserialize_withdrawal(r));
@@ -475,6 +506,9 @@ Block Block::deserialize(const uint8_t* data, size_t len) {
 
     if (r.remaining() >= sizeof(uint32_t)) {
         uint32_t out_count = r.read_u32();
+        if (out_count > MAX_BLOCK_OUTPUTS) {
+            throw std::runtime_error("Cantidad de outputs de deposito excede el limite protocolario del bloque.");
+        }
         block.deposit_outputs.reserve(out_count);
         for (uint32_t i = 0; i < out_count; ++i) {
             block.deposit_outputs.push_back(deserialize_output(r));
@@ -483,6 +517,9 @@ Block Block::deserialize(const uint8_t* data, size_t len) {
 
     if (r.remaining() >= sizeof(uint32_t)) {
         uint32_t out_count = r.read_u32();
+        if (out_count > MAX_BLOCK_OUTPUTS) {
+            throw std::runtime_error("Cantidad de outputs de retiro excede el limite protocolario del bloque.");
+        }
         block.withdrawal_outputs.reserve(out_count);
         for (uint32_t i = 0; i < out_count; ++i) {
             block.withdrawal_outputs.push_back(deserialize_output(r));

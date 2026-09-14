@@ -6,6 +6,8 @@
 #include <fstream>
 #include <filesystem>
 #include <cstring>
+#include <algorithm>
+#include <cctype>
 
 using json = nlohmann::json;
 
@@ -378,14 +380,30 @@ void RpcServer::setup_routes() {
             std::string contract_addr = body.value("contract_address", "");
             uint32_t log_index = body.value("log_index", 0U);
             uint64_t l2_block = body.value("l2_block_number", 0ULL);
-            std::string event_id = body.value("event_id", "");
-            if (event_id.empty()) {
-                event_id = std::to_string(chain_id) + ":" + contract_addr + ":" + custom_tx + ":" + std::to_string(log_index);
+
+            if (contract_addr.empty()) {
+                res.status = 400;
+                res.set_content(json{{"error", "El campo contract_address es obligatorio para construir la identidad canónica del evento."}}.dump(), "application/json");
+                return;
             }
 
-            if (node_.is_deposit_tx_processed(event_id) || node_.is_deposit_tx_processed(custom_tx)) {
+            std::string normalized_contract = contract_addr;
+            std::transform(normalized_contract.begin(), normalized_contract.end(), normalized_contract.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            const std::string canonical_event_id = std::to_string(chain_id) + ":" + normalized_contract + ":" +
+                                                   custom_tx + ":" + std::to_string(log_index);
+            const std::string supplied_event_id = body.value("event_id", "");
+            if (!supplied_event_id.empty() && supplied_event_id != canonical_event_id) {
+                res.status = 400;
+                res.set_content(json{{"error", "event_id no coincide con la identidad canónica derivada de chainId/contract/txHash/logIndex."}}.dump(), "application/json");
+                return;
+            }
+            const std::string& event_id = canonical_event_id;
+
+            // Idempotencia por evento L2, no por txHash: una misma transacción puede emitir varios logs DepositInitiated.
+            if (node_.is_deposit_tx_processed(event_id)) {
                 res.status = 409;
-                res.set_content(json{{"error", "Transacción de depósito ya procesada previamente (idempotencia garantizada)."}}.dump(), "application/json");
+                res.set_content(json{{"error", "Evento de depósito ya procesado previamente (idempotencia garantizada)."}}.dump(), "application/json");
                 return;
             }
 
@@ -441,9 +459,12 @@ void RpcServer::setup_routes() {
                 }
             }
 
-            if (attested_signatures.empty()) {
+            const uint32_t required_attestations = std::max(1U, node_.get_quorum_threshold());
+            if (attested_signatures.size() < required_attestations) {
                 res.status = 401;
-                res.set_content(json{{"error", "No autorizado: se requiere un certificado criptográfico de depósito válido firmado por un oráculo autorizado (P0-01)."}}.dump(), "application/json");
+                res.set_content(json{{"error", "No autorizado: certificado de depósito no alcanza el quórum M-de-N requerido."},
+                                     {"required", required_attestations},
+                                     {"verified", attested_signatures.size()}}.dump(), "application/json");
                 return;
             }
 
