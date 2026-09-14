@@ -1,0 +1,91 @@
+name: CryptoPeg CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  cpp-tests:
+    name: C++ Build and Unit Tests
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install C++ dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libsodium-dev \
+            libssl-dev \
+            liblmdb-dev \
+            nlohmann-json3-dev
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: |
+          cmake --build build --parallel 2
+
+      - name: Test vault precision
+        run: ./build/bin/test_vault_precision
+
+      - name: Test stealth privacy
+        run: ./build/bin/test_stealth_privacy
+
+      - name: Test tumbler mixer
+        run: ./build/bin/test_tumbler_mixer
+
+      - name: Test LMDB persistence
+        run: ./build/bin/test_lmdb_persistence
+
+      - name: Test RPC API
+        run: ./build/bin/test_rpc_api
+
+      - name: Test mnemonic wallet
+        run: ./build/bin/test_mnemonic_wallet
+
+      - name: Test P2P network
+        run: ./build/bin/test_p2p_network
+
+      - name: Test cryptographic primitives
+        run: ./build/bin/test_crypto_primitives
+
+  solidity-tests:
+    name: Smart Contracts and Oracle Tests
+    runs-on: ubuntu-24.04
+
+    defaults:
+      run:
+        working-directory: contracts
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: contracts/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile contracts
+        run: npm run compile
+
+      - name: Run unit tests
+        run: npm test
