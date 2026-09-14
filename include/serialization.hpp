@@ -6,8 +6,13 @@
 #include <cstring>
 #include <stdexcept>
 #include <array>
+#include <limits>
 
 namespace crypto {
+
+// Límite protocolario para cadenas recibidas desde red. Evita reservas/copies
+// desproporcionadas antes de que el bloque sea validado semánticamente.
+constexpr uint32_t MAX_SERIALIZED_STRING_BYTES = 64 * 1024;
 
 class ByteWriter {
 public:
@@ -39,6 +44,9 @@ public:
     }
 
     void write_string(const std::string& str) {
+        if (str.size() > std::numeric_limits<uint32_t>::max()) {
+            throw std::runtime_error("Cadena demasiado grande para serializacion u32.");
+        }
         write_u32(static_cast<uint32_t>(str.size()));
         if (!str.empty()) {
             write_bytes(reinterpret_cast<const uint8_t*>(str.data()), str.size());
@@ -59,16 +67,12 @@ public:
         : data_(data), size_(size), cursor_(0) {}
 
     uint8_t read_u8() {
-        if (cursor_ + 1 > size_) {
-            throw std::runtime_error("Desbordamiento al leer u8 en deserialización.");
-        }
+        require_remaining(1, "u8");
         return data_[cursor_++];
     }
 
     uint32_t read_u32() {
-        if (cursor_ + 4 > size_) {
-            throw std::runtime_error("Desbordamiento al leer u32 en deserialización.");
-        }
+        require_remaining(4, "u32");
         uint32_t val = 0;
         for (int i = 0; i < 4; ++i) {
             val |= (static_cast<uint32_t>(data_[cursor_++]) << (i * 8));
@@ -77,9 +81,7 @@ public:
     }
 
     uint64_t read_u64() {
-        if (cursor_ + 8 > size_) {
-            throw std::runtime_error("Desbordamiento al leer u64 en deserialización.");
-        }
+        require_remaining(8, "u64");
         uint64_t val = 0;
         for (int i = 0; i < 8; ++i) {
             val |= (static_cast<uint64_t>(data_[cursor_++]) << (i * 8));
@@ -88,9 +90,7 @@ public:
     }
 
     void read_bytes(uint8_t* out, size_t len) {
-        if (cursor_ + len > size_) {
-            throw std::runtime_error("Desbordamiento al leer bytes en deserialización.");
-        }
+        require_remaining(len, "bytes");
         std::memcpy(out, data_ + cursor_, len);
         cursor_ += len;
     }
@@ -104,9 +104,10 @@ public:
 
     std::string read_string() {
         uint32_t len = read_u32();
-        if (cursor_ + len > size_) {
-            throw std::runtime_error("Desbordamiento al leer cadena en deserialización.");
+        if (len > MAX_SERIALIZED_STRING_BYTES) {
+            throw std::runtime_error("Cadena serializada excede el limite protocolario de seguridad.");
         }
+        require_remaining(static_cast<size_t>(len), "cadena");
         std::string str(reinterpret_cast<const char*>(data_ + cursor_), len);
         cursor_ += len;
         return str;
@@ -117,6 +118,13 @@ public:
     }
 
 private:
+    void require_remaining(size_t len, const char* what) const {
+        // Comparar contra remaining evita overflow de cursor_ + len.
+        if (cursor_ > size_ || len > size_ - cursor_) {
+            throw std::runtime_error(std::string("Desbordamiento al leer ") + what + " en deserializacion.");
+        }
+    }
+
     const uint8_t* data_;
     size_t size_;
     size_t cursor_;
