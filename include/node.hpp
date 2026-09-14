@@ -79,6 +79,8 @@ public:
     uint64_t get_blockchain_height() const;
     Hash256 get_top_block_hash() const;
     bool get_block(uint64_t height, Block& block) const;
+    // Alias de compatibilidad para tests y consumidores que usan el nombre explícito por altura.
+    bool get_block_by_height(uint64_t height, Block& block) const { return get_block(height, block); }
     bool is_key_image_spent(const KeyImage& image) const;
     bool is_deposit_tx_processed(const std::string& tx_hash) const { return db_.is_deposit_tx_processed(tx_hash); }
     const BlockchainDB& get_db() const { return db_; }
