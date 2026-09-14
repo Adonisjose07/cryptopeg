@@ -282,28 +282,67 @@ describe("Oracle Listener & Relayer Unit Tests", function () {
       expect(typeof strVal).to.equal("string");
     });
 
-    it("debe aislar órdenes con reversión permanente on-chain sin congelar la cola de retiros (V4-05)", function () {
+    it("debe aislar órdenes con fallos on-chain en Dead Letter Queue (DLQ) sin marcarlas como procesadas ni descartar fondos (CP-AUD-03)", function () {
       const processedWithdrawalOrders = new Set();
+      const quarantinedWithdrawalOrders = new Set();
       const orderFailures = new Map();
 
       const order1 = "ORD-FAIL-REVERT";
       const order2 = "ORD-SUCCESS-VALID";
 
-      // Simular fallo permanente de order1
+      // Simular fallo de ejecución de orden 1 (reversión por pausa, saldo insuficiente, etc.)
       const err = new Error("execution reverted: transfer failed in recipient contract");
-      const isPermanentRevert = err.message.includes("reverted") || err.message.includes("execution reverted");
+      // En la lógica corregida CP-AUD-03, NO se descarta directamente como procesada,
+      // sino que se gestiona mediante el umbral de reintentos hacia la DLQ
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const fails = (orderFailures.get(order1) || 0) + 1;
+        orderFailures.set(order1, fails);
+        if (fails >= 3) {
+          quarantinedWithdrawalOrders.add(order1);
+        }
+      }
 
-      expect(isPermanentRevert).to.be.true;
-      if (isPermanentRevert) {
+      // Orden 1 quedó registrada en cuarentena DLQ y NUNCA en procesadas exitosamente
+      expect(quarantinedWithdrawalOrders.has(order1)).to.be.true;
+      expect(processedWithdrawalOrders.has(order1)).to.be.false;
+
+      // La siguiente orden válida puede procesarse normalmente
+      processedWithdrawalOrders.add(order2);
+      expect(processedWithdrawalOrders.has(order2)).to.be.true;
+    });
+
+    it("debe marcar como procesada únicamente si la orden ya fue ejecutada on-chain (already executed) (CP-AUD-03)", function () {
+      const processedWithdrawalOrders = new Set();
+      const order1 = "ORD-ALREADY-EXECUTED";
+
+      const err = new Error("execution reverted: Withdrawal order already executed");
+      const isAlreadyExecuted = err.message.includes("Withdrawal order already executed");
+
+      if (isAlreadyExecuted) {
         processedWithdrawalOrders.add(order1);
       }
 
-      // Orden 1 quedó registrada como procesada/aislada
       expect(processedWithdrawalOrders.has(order1)).to.be.true;
+    });
 
-      // La cola no se bloquea y procesa la siguiente orden
-      processedWithdrawalOrders.add(order2);
-      expect(processedWithdrawalOrders.has(order2)).to.be.true;
+    it("debe respetar la profundidad de confirmaciones de la cadena confidencial (CONFIDENTIAL_CHAIN_CONFIRMATIONS) (CP-AUD-02)", function () {
+      const currentChainHeight = 50;
+      const CONFIDENTIAL_CHAIN_CONFIRMATIONS = 6;
+      const maxSafeHeight = Math.max(0, currentChainHeight - CONFIDENTIAL_CHAIN_CONFIRMATIONS);
+
+      expect(maxSafeHeight).to.equal(44);
+
+      let lastCheckedChainHeight = 40;
+      const startHeight = lastCheckedChainHeight === 0 ? 1 : lastCheckedChainHeight + 1;
+
+      expect(startHeight).to.equal(41);
+      expect(startHeight).to.be.lessThanOrEqual(maxSafeHeight);
+      expect(maxSafeHeight).to.be.lessThan(currentChainHeight);
+
+      // Si la cadena aún no tiene suficientes confirmaciones (e.g. altura 5 < 6)
+      const lowHeight = 5;
+      const safeLow = Math.max(0, lowHeight - CONFIDENTIAL_CHAIN_CONFIRMATIONS);
+      expect(safeLow).to.equal(0); // No procesa nada hasta alcanzar 6 confirmaciones
     });
 
     it("debe aislar órdenes tras alcanzar el umbral de 3 reintentos fallidos transitorios en Dead Letter Queue (V4-05 / CP-SEC-01)", function () {

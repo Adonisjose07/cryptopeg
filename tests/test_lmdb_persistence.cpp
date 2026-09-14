@@ -526,6 +526,110 @@ int main() {
         assert(node2.get_vault().get_accumulated_fees() == expected_fees_before);
         assert(node2.audit_system());
         std::cout << "  [OK] ReorgGuard restauró el bloque legítimo, la solvencia contable intacta (AUD-CP-01) y los UTXOs sin pérdida.\n";
+
+        // -------------------------------------------------------------
+        // PASO 10: Fork-Choice determinista con Merkle Root idéntico y hashes distintos (CP-AUD-01)
+        // -------------------------------------------------------------
+    std::cout << "\n[PASO 10] Fork-Choice determinista con Merkle Root idéntico y Hashes distintos (CP-AUD-01)...\n";
+    {
+        uint64_t cur_h = node2.get_blockchain_height();
+        crypto::Block top_b;
+        assert(node2.get_block_by_height(cur_h, top_b));
+
+        // Construir un bloque competidor idéntico en transacciones/Merkle root pero firmado por val1_pk
+        crypto::Block comp_block = top_b;
+        comp_block.header.timestamp = top_b.header.timestamp + 5; // Modifica signing_hash
+        comp_block.header.quorum_pubkeys.clear();
+        comp_block.header.quorum_signatures.clear();
+        comp_block.header.sign(val1_sk.data(), val1_pk); // 1 sola firma de quórum
+
+        std::string err_fork;
+        bool applied = node2.apply_remote_block(comp_block, err_fork);
+        // Debe haber ejecutado Fork-Choice y no haber retornado 'true' ciegamente por Merkle root
+        assert(!applied || crypto::to_hex(node2.get_top_block_hash()) == crypto::to_hex(comp_block.hash()));
+        std::cout << "  [OK] Fork-Choice evaluó el bloque competidor sin falso cortocircuito por Merkle Root (CP-AUD-01).\n";
+    }
+
+    // -------------------------------------------------------------
+    // PASO 11: Conservación estricta de balance: total_spent != ring_denomination (CP-MED-02)
+    // -------------------------------------------------------------
+    std::cout << "\n[PASO 11] Conservación Estricta de Balance: total_spent != ring_denomination (CP-MED-02)...\n";
+    {
+        crypto::Block def_block;
+        def_block.header.height = node2.get_blockchain_height() + 1;
+        def_block.header.prev_block_hash = node2.get_top_block_hash();
+        def_block.header.timestamp = 1726000000ULL;
+
+        auto pool = node2.get_utxo_pool();
+        assert(!pool.empty());
+        crypto::OneTimeOutput real_utxo = pool[0];
+
+        // Crear transacción donde se gasta real_utxo.amount pero las salidas son menores (deflación / destrucción)
+        crypto::ShieldedTransaction def_tx;
+        def_tx.public_fee = 0;
+        crypto::OneTimeOutput out;
+        out.amount = (real_utxo.amount > 1000) ? (real_utxo.amount - 1000) : 1;
+        randombytes_buf(out.ephemeral_public_key.data(), 32);
+        randombytes_buf(out.destination_one_time.data(), 32);
+        def_tx.outputs.push_back(out);
+
+        def_tx.ring_sig.ring_pubkeys = {real_utxo.destination_one_time};
+        def_tx.ring_sig.responses.resize(1);
+        randombytes_buf(def_tx.ring_sig.responses[0].data(), 32);
+        randombytes_buf(def_tx.ring_sig.c0.data(), 32);
+        randombytes_buf(def_tx.ring_sig.key_image.data(), 32);
+
+        def_block.txs.push_back(def_tx);
+        def_block.header.merkle_root = def_block.compute_merkle_root();
+        def_block.header.sign(val1_sk.data(), val1_pk);
+
+        std::string err_def;
+        bool def_applied = node2.apply_remote_block(def_block, err_def);
+        assert(!def_applied);
+        assert(err_def.find("conservacion de balance") != std::string::npos);
+        std::cout << "  [OK] Transacción deflacionaria con destrucción de suministro rechazada categóricamente: " << err_def << "\n";
+    }
+
+    // -------------------------------------------------------------
+    // PASO 12: Rechazo de Transacción con Claves Duplicadas en Anillo MLSAG (SEC-03)
+    // -------------------------------------------------------------
+    std::cout << "\n[PASO 12] Rechazo de Transacción con Claves Duplicadas en Anillo MLSAG (SEC-03)...\n";
+    {
+        crypto::Block dup_block;
+        dup_block.header.height = node2.get_blockchain_height() + 1;
+        dup_block.header.prev_block_hash = node2.get_top_block_hash();
+        dup_block.header.timestamp = 1726000000ULL;
+
+        auto pool = node2.get_utxo_pool();
+        assert(!pool.empty());
+        crypto::OneTimeOutput real_utxo = pool[0];
+
+        crypto::ShieldedTransaction dup_tx;
+        dup_tx.public_fee = 0;
+        crypto::OneTimeOutput out;
+        out.amount = real_utxo.amount;
+        randombytes_buf(out.ephemeral_public_key.data(), 32);
+        randombytes_buf(out.destination_one_time.data(), 32);
+        dup_tx.outputs.push_back(out);
+
+        // Anillo con clave duplicada [P, P]
+        dup_tx.ring_sig.ring_pubkeys = {real_utxo.destination_one_time, real_utxo.destination_one_time};
+        dup_tx.ring_sig.responses.resize(2);
+        randombytes_buf(dup_tx.ring_sig.responses[0].data(), 32);
+        randombytes_buf(dup_tx.ring_sig.responses[1].data(), 32);
+        randombytes_buf(dup_tx.ring_sig.c0.data(), 32);
+        randombytes_buf(dup_tx.ring_sig.key_image.data(), 32);
+
+        dup_block.txs.push_back(dup_tx);
+        dup_block.header.merkle_root = dup_block.compute_merkle_root();
+        dup_block.header.sign(val1_sk.data(), val1_pk);
+
+        std::string err_dup;
+        bool dup_applied = node2.apply_remote_block(dup_block, err_dup);
+        assert(!dup_applied);
+        assert(err_dup.find("claves publicas duplicadas") != std::string::npos);
+        std::cout << "  [OK] Bloque con claves duplicadas en anillo MLSAG rechazado categóricamente: " << err_dup << "\n";
+    }
     }
 
     cleanup_test_dir(test_db_path);

@@ -98,10 +98,26 @@ public:
         return false;
     }
 
-    const Vault& get_vault() const { return vault_; }
-    const std::vector<OneTimeOutput>& get_utxo_pool() const { return utxo_pool_; }
-    const std::vector<ShieldedTransaction>& get_tx_history() const { return tx_history_; }
-    const std::string& get_db_path() const { return db_path_; }
+    Vault get_vault() const {
+        std::lock_guard<std::mutex> lock(node_mutex_);
+        return vault_;
+    }
+    std::vector<OneTimeOutput> get_utxo_pool() const {
+        std::lock_guard<std::mutex> lock(node_mutex_);
+        return utxo_pool_;
+    }
+    size_t get_utxo_pool_size() const {
+        std::lock_guard<std::mutex> lock(node_mutex_);
+        return utxo_pool_.size();
+    }
+    std::vector<ShieldedTransaction> get_tx_history() const {
+        std::lock_guard<std::mutex> lock(node_mutex_);
+        return tx_history_;
+    }
+    std::string get_db_path() const {
+        std::lock_guard<std::mutex> lock(node_mutex_);
+        return db_path_;
+    }
 
 private:
     mutable std::mutex node_mutex_;

@@ -273,6 +273,20 @@ ShieldedTransaction Node::transfer_shielded(
         throw std::runtime_error("Fondos insuficientes en el output para cubrir monto + comisión.");
     }
 
+    // 1b. Verificar que el output seleccionado existe realmente en el libro mayor de UTXOs (CP-AUD-05)
+    bool utxo_exists = false;
+    for (const auto& u : utxo_pool_) {
+        if (sodium_memcmp(u.destination_one_time.data(), input_utxo.destination_one_time.data(), 32) == 0 &&
+            sodium_memcmp(u.ephemeral_public_key.data(), input_utxo.ephemeral_public_key.data(), 32) == 0 &&
+            u.amount == input_utxo.amount) {
+            utxo_exists = true;
+            break;
+        }
+    }
+    if (!utxo_exists) {
+        throw std::runtime_error("El output seleccionado no existe en el libro mayor de UTXOs.");
+    }
+
     // 2. Derivar la clave privada de un solo uso x para este output
     Key256 one_time_priv = StealthProtocol::derive_one_time_private_key(sender_wallet, input_utxo);
 
@@ -392,6 +406,20 @@ TumblingPlan Node::withdraw_shielded(
 
     if (input_utxo.amount < tokens_to_withdraw) {
         throw std::runtime_error("Monto en output insuficiente para el retiro solicitado.");
+    }
+
+    // 1b. Verificar que el output seleccionado existe realmente en el libro mayor de UTXOs (CP-AUD-05)
+    bool utxo_exists = false;
+    for (const auto& u : utxo_pool_) {
+        if (sodium_memcmp(u.destination_one_time.data(), input_utxo.destination_one_time.data(), 32) == 0 &&
+            sodium_memcmp(u.ephemeral_public_key.data(), input_utxo.ephemeral_public_key.data(), 32) == 0 &&
+            u.amount == input_utxo.amount) {
+            utxo_exists = true;
+            break;
+        }
+    }
+    if (!utxo_exists) {
+        throw std::runtime_error("El output seleccionado no existe en el libro mayor de UTXOs.");
     }
 
     // 2. Derivar clave de un solo uso y marcar imagen de clave como gastada
@@ -543,9 +571,8 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             return false;
         }
 
-        // Si es exactamente el mismo bloque, ya está procesado y asentado
-        if (std::memcmp(block.header.merkle_root.data(), local_top.header.merkle_root.data(), 32) == 0 &&
-            std::memcmp(block.header.prev_block_hash.data(), local_top.header.prev_block_hash.data(), 32) == 0) {
+        // Si es exactamente el mismo bloque por hash canónico, ya está procesado y asentado (CP-AUD-01)
+        if (std::memcmp(block.hash().data(), local_top.hash().data(), 32) == 0) {
             return true;
         }
 
@@ -898,6 +925,16 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             }
         }
 
+        // 2.0 Verificar unicidad estricta de participantes en el anillo MLSAG (SEC-03)
+        for (size_t i = 0; i < tx.ring_sig.ring_pubkeys.size(); ++i) {
+            for (size_t j = i + 1; j < tx.ring_sig.ring_pubkeys.size(); ++j) {
+                if (sodium_memcmp(tx.ring_sig.ring_pubkeys[i].data(), tx.ring_sig.ring_pubkeys[j].data(), 32) == 0) {
+                    error_msg = "Transaccion rechazada: claves publicas duplicadas en el anillo MLSAG.";
+                    return false;
+                }
+            }
+        }
+
         Amount ring_denomination = 0;
         bool denomination_set = false;
         for (const auto& r_pk : tx.ring_sig.ring_pubkeys) {
@@ -921,8 +958,8 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             }
         }
 
-        if (!denomination_set || tx_total_spent > ring_denomination) {
-            error_msg = "Violacion de conservacion de balance en transaccion remota: salidas superan la denominacion de los inputs del anillo.";
+        if (!denomination_set || tx_total_spent != ring_denomination) {
+            error_msg = "Violacion de conservacion de balance en transaccion remota: salidas mas comision no coinciden exactamente con la denominacion del input del anillo (CP-MED-02).";
             return false;
         }
 
@@ -1145,6 +1182,15 @@ ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransactio
         }
     }
 
+    // 4b. Verificar unicidad estricta de participantes en el anillo MLSAG (SEC-03)
+    for (size_t i = 0; i < tx.ring_sig.ring_pubkeys.size(); ++i) {
+        for (size_t j = i + 1; j < tx.ring_sig.ring_pubkeys.size(); ++j) {
+            if (sodium_memcmp(tx.ring_sig.ring_pubkeys[i].data(), tx.ring_sig.ring_pubkeys[j].data(), 32) == 0) {
+                throw std::runtime_error("Transaccion rechazada: claves publicas duplicadas en el anillo MLSAG.");
+            }
+        }
+    }
+
     // 5. Verificar pertenencia y homogeneidad estricta de todos los miembros del anillo en el ledger (AUD-H0-02, AUD-H0-P0-02)
     Amount ring_denomination = 0;
     bool denomination_set = false;
@@ -1178,11 +1224,11 @@ ShieldedTransaction Node::submit_pre_signed_transaction(const ShieldedTransactio
         }
     }
 
-    if (!denomination_set || total_spent > ring_denomination) {
+    if (!denomination_set || total_spent != ring_denomination) {
         throw std::runtime_error("Violacion de conservacion de balance: la suma de salidas mas comision (" +
                                  format_usdt(total_spent) +
-                                 ") excede la denominacion del input del anillo (" +
-                                 format_usdt(ring_denomination) + ").");
+                                 ") debe ser exactamente igual a la denominacion del input del anillo (" +
+                                 format_usdt(ring_denomination) + ") (CP-MED-02).");
     }
 
     // 6. Verificar hash canónico

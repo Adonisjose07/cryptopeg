@@ -204,6 +204,15 @@ bool RingSignatureEngine::verify(
         }
     }
 
+    // 1b. Verificar unicidad estricta de claves públicas en el anillo MLSAG (SEC-03)
+    for (size_t i = 0; i < n; ++i) {
+        for (size_t j = i + 1; j < n; ++j) {
+            if (sodium_memcmp(signature.ring_pubkeys[i].data(), signature.ring_pubkeys[j].data(), 32) == 0) {
+                return false; // Prohibir duplicación de claves que degrada el anonimato
+            }
+        }
+    }
+
     // 2. Mitigación completa de subgrupo de baja torsión y cofactor 8 (AUD-INFO-01 & AUD-CRIT-01)
     Key256 I8;
     static const unsigned char eight_scalar[32] = {8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

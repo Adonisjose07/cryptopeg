@@ -10,6 +10,7 @@ const VAULT_ADDRESS = process.env.USDT_VAULT_ADDRESS || "0x511A31987EF1019a41CBb
 const NODE_DAEMON_URL = process.env.NODE_DAEMON_URL || "http://127.0.0.1:8080";
 const POLL_INTERVAL_MS = parseInt(process.env.ORACLE_POLL_INTERVAL_MS || "5000");
 const L2_CONFIRMATION_BLOCKS = parseInt(process.env.L2_CONFIRMATION_BLOCKS || "12");
+const CONFIDENTIAL_CHAIN_CONFIRMATIONS = parseInt(process.env.CONFIDENTIAL_CHAIN_CONFIRMATIONS || "6");
 const STATE_FILE = process.env.RELAYER_STATE_FILE || path.resolve(__dirname, "../../data/relayer_state.json");
 
 // Helper para derivar par de claves Ed25519 para atestaciones criptográficas de depósito (Auditoría v3 - P0-01)
@@ -350,10 +351,14 @@ async function main() {
       const currentHeight = Number(status.blockchain_height || 0);
       if (currentHeight <= 0) return;
 
-      const startHeight = lastCheckedChainHeight === 0 ? 1 : lastCheckedChainHeight + 1;
-      if (startHeight > currentHeight) return;
+      // Profundidad de confirmaciones requeridas en la cadena confidencial para evitar doble gasto por reorgs (CP-AUD-02)
+      const maxSafeHeight = Math.max(0, currentHeight - CONFIDENTIAL_CHAIN_CONFIRMATIONS);
+      if (maxSafeHeight <= 0) return;
 
-      for (let h = startHeight; h <= currentHeight; h++) {
+      const startHeight = lastCheckedChainHeight === 0 ? 1 : lastCheckedChainHeight + 1;
+      if (startHeight > maxSafeHeight) return;
+
+      for (let h = startHeight; h <= maxSafeHeight; h++) {
         let blockSucceeded = true;
         try {
           const blockRes = await fetch(`${NODE_DAEMON_URL}/api/v1/chain/block/${h}`);
@@ -381,15 +386,15 @@ async function main() {
 
               const recipient = w.destination;
               if (!recipient || !ethers.isAddress(recipient)) {
-                console.warn(`[ORACLE-RELAYER] Bloque #${h} - Orden ${orderIdStr} tiene dirección de destino no válida en Arbitrum: "${recipient}". Omitiendo.`);
-                processedWithdrawalOrders.add(orderIdStr);
+                console.warn(`[ORACLE-RELAYER] Bloque #${h} - Orden ${orderIdStr} tiene dirección de destino no válida en Arbitrum: "${recipient}". Aislándola en DLQ.`);
+                quarantinedWithdrawalOrders.add(orderIdStr);
                 continue;
               }
 
               const amount = BigInt(w.net_amount_raw || Math.round(parseFloat(w.net_tumbled) * 1e6));
               if (amount <= 0n) {
-                console.warn(`[ORACLE-RELAYER] Bloque #${h} - Orden ${orderIdStr} tiene monto neto 0.`);
-                processedWithdrawalOrders.add(orderIdStr);
+                console.warn(`[ORACLE-RELAYER] Bloque #${h} - Orden ${orderIdStr} tiene monto neto 0. Aislándola en DLQ.`);
+                quarantinedWithdrawalOrders.add(orderIdStr);
                 continue;
               }
 
@@ -447,13 +452,13 @@ async function main() {
 
               try {
                 let tx;
-                try {
-                  // Intentar interfaz V2 con soporte EIP-712 y comisiones
+                // Si el contrato posee la función V2 con comisiones y EIP-712
+                if (typeof vaultWithSigner["withdraw(bytes32,address,uint256,uint256,bytes)"] === "function") {
                   tx = await vaultWithSigner["withdraw(bytes32,address,uint256,uint256,bytes)"](
                     orderIdHash, recipient, amount, withdrawFee, signature
                   );
-                } catch (v2Err) {
-                  // Si el contrato desplegado en Arbitrum es V1, ejecutar la sobrecarga legada
+                } else {
+                  // Fallback para contrato V1 legado sin comisiones (4 parámetros)
                   const legacyHash = ethers.solidityPackedKeccak256(
                     ["bytes32", "address", "uint256", "uint256", "address"],
                     [orderIdHash, recipient, amount, chainId, VAULT_ADDRESS]
@@ -473,24 +478,26 @@ async function main() {
                 processedWithdrawalOrders.add(orderIdStr);
               } catch (txErr) {
                 const errMsg = txErr.message || "";
-                const isPermanentRevert = errMsg.includes("Withdrawal order already executed") ||
-                                          errMsg.includes("reverted") ||
-                                          errMsg.includes("execution reverted") ||
-                                          errMsg.includes("CALL_EXCEPTION") ||
-                                          errMsg.includes("Invalid recipient") ||
-                                          errMsg.includes("ERC20:");
 
-                if (isPermanentRevert) {
-                  console.warn(`[ORACLE-RELAYER] [ALERTA] Orden ${orderIdStr} descartada por reversión permanente o ya ejecutada on-chain: ${errMsg}`);
+                // Verificar directamente en el Smart Contract si la orden ya fue ejecutada (CP-AUD-03)
+                let alreadyExecutedOnChain = false;
+                try {
+                  alreadyExecutedOnChain = await vaultReadOnly.executedWithdrawals(orderIdHash);
+                } catch (_) {}
+
+                if (alreadyExecutedOnChain || errMsg.includes("Withdrawal order already executed")) {
+                  console.warn(`[ORACLE-RELAYER] Orden ${orderIdStr} ya confirmada/ejecutada on-chain. Marcando como procesada.`);
                   processedWithdrawalOrders.add(orderIdStr);
                 } else {
+                  // Fallos de transacción, reversión por pausa, saldo insuficiente o error transitorio:
+                  // NUNCA descartar agregando a processedWithdrawalOrders (CP-AUD-03)
                   const fails = (orderFailures.get(orderIdStr) || 0) + 1;
                   orderFailures.set(orderIdStr, fails);
                   if (fails >= 3) {
-                    console.error(`[ORACLE-RELAYER] [CRÍTICO - CUARENTENA DLQ] Orden ${orderIdStr} aislada y colocada en CUARENTENA tras 3 intentos fallidos (${errMsg}). Desbloqueando cola sin marcar como procesada.`);
+                    console.error(`[ORACLE-RELAYER] [CRÍTICO - CUARENTENA DLQ] Orden ${orderIdStr} aislada y colocada en CUARENTENA tras 3 intentos fallidos (${errMsg}). Desbloqueando cola sin marcar como procesada para no descartar fondos.`);
                     quarantinedWithdrawalOrders.add(orderIdStr);
                   } else {
-                    console.error(`[ORACLE-RELAYER] [REINTENTO ${fails}/3] Fallo transitorio al ejecutar withdraw en Arbitrum:`, errMsg);
+                    console.error(`[ORACLE-RELAYER] [REINTENTO ${fails}/3] Fallo al ejecutar withdraw en Arbitrum (${errMsg}). Reintentando en siguiente sondeo.`);
                     blockSucceeded = false;
                     break;
                   }

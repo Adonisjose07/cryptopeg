@@ -133,6 +133,14 @@ contract CryptoPegVaultV2 is Ownable, ReentrancyGuard, Pausable, EIP712 {
         require(recipient != address(0), "Invalid recipient address");
         require(amount > 0, "Withdraw amount must be > 0");
 
+        // 0. Validar que la comisión respete la tasa máxima permitida por withdrawFeeBps (CP-HIGH-01)
+        if (withdrawFeeBps == 0) {
+            require(fee == 0, "Withdrawal fee must be 0 when fee rate is 0");
+        } else {
+            uint256 maxFee = (amount * withdrawFeeBps) / (10000 - withdrawFeeBps) + 1;
+            require(fee <= maxFee, "Withdrawal fee exceeds allowed rate");
+        }
+
         // 1. Verificación primaria: Firma tipada estructurada EIP-712
         bytes32 structHash = keccak256(
             abi.encode(WITHDRAWAL_TYPEHASH, orderId, recipient, amount, fee)

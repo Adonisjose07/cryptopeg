@@ -542,6 +542,45 @@ int main() {
         std::cout << "  [OK] Validación sintáctica canónica de direcciones EVM verificada al 100% (AUD-CP-03).\n";
     }
 
+    // -------------------------------------------------------------
+    // TEST 13: Rechazo de Claves Públicas Duplicadas en Anillos MLSAG (SEC-03)
+    // -------------------------------------------------------------
+    std::cout << "\n[TEST 13] Rechazo de Claves Duplicadas en Anillo MLSAG (SEC-03)...\n";
+    {
+        crypto::Key256 priv, pub;
+        crypto_core_ed25519_scalar_random(priv.data());
+        crypto_scalarmult_ed25519_base_noclamp(pub.data(), priv.data());
+
+        std::vector<crypto::Key256> dup_ring = {pub, pub};
+        crypto::Hash256 msg{};
+        crypto_generichash(msg.data(), 32, (const uint8_t*)"test_dup_ring", 13, nullptr, 0);
+
+        crypto::RingSignature sig;
+        sig.key_image = crypto::RingSignatureEngine::compute_key_image(priv, pub);
+        sig.ring_pubkeys = dup_ring;
+        sig.responses.resize(2);
+        randombytes_buf(sig.responses[0].data(), 32);
+        randombytes_buf(sig.responses[1].data(), 32);
+        randombytes_buf(sig.c0.data(), 32);
+
+        CHECK(!crypto::RingSignatureEngine::verify(msg, sig),
+              "Firma de anillo MLSAG con claves duplicadas [P, P] debe ser rechazada categóricamente");
+
+        crypto::Key256 priv2, pub2;
+        crypto_core_ed25519_scalar_random(priv2.data());
+        crypto_scalarmult_ed25519_base_noclamp(pub2.data(), priv2.data());
+
+        std::vector<crypto::Key256> dup_ring3 = {pub, pub2, pub};
+        sig.ring_pubkeys = dup_ring3;
+        sig.responses.resize(3);
+        randombytes_buf(sig.responses[2].data(), 32);
+
+        CHECK(!crypto::RingSignatureEngine::verify(msg, sig),
+              "Firma de anillo MLSAG con [P1, P2, P1] debe ser rechazada categóricamente");
+
+        std::cout << "  [OK] Rechazo estricto de claves públicas duplicadas en anillos MLSAG verificado al 100% (SEC-03).\n";
+    }
+
     std::cout << "\n=================================================================\n";
     std::cout << "  [EXITO TOTAL] Todos los tests criptográficos pasaron al 100%!  \n";
     std::cout << "=================================================================\n";

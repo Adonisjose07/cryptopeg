@@ -188,8 +188,9 @@ describe("CryptoPegVaultV2 (EIP-712 & Dual Fallback) Unit & Security Tests", fun
       const amount = ethers.parseUnits("150", 6);
       const legacySig = await getLegacySignature(orderId, bob.address, amount, validator);
 
+      // 0.5 USDT respeta el límite de comisión (maxFee ~0.75 USDT) pero debe ser rechazado por ser firma legada
       await expect(
-        vault.connect(bob).withdraw(orderId, bob.address, amount, ethers.parseUnits("1", 6), legacySig)
+        vault.connect(bob).withdraw(orderId, bob.address, amount, ethers.parseUnits("0.5", 6), legacySig)
       ).to.be.revertedWith("Legacy signature does not authorize non-zero fee");
     });
 
@@ -221,6 +222,19 @@ describe("CryptoPegVaultV2 (EIP-712 & Dual Fallback) Unit & Security Tests", fun
       await expect(
         vault.connect(bob).withdraw(orderId, bob.address, 0, 0, sig)
       ).to.be.revertedWith("Withdraw amount must be > 0");
+    });
+
+    it("debe rechazar retiro si la comisión supera la tasa máxima permitida por withdrawFeeBps (CP-HIGH-01)", async function () {
+      const orderId = ethers.hexlify(ethers.randomBytes(32));
+      const amount = ethers.parseUnits("100", 6);
+      // WITHDRAW_FEE_BPS es 50 (0.50%). Para 100 USDT, maxFee es aprox 0.5025 USDT.
+      // Intentamos cobrar una comisión inflada de 10 USDT
+      const excessiveFee = ethers.parseUnits("10", 6);
+      const sig = await getEIP712Signature(orderId, bob.address, amount, excessiveFee, validator);
+
+      await expect(
+        vault.connect(bob).withdraw(orderId, bob.address, amount, excessiveFee, sig)
+      ).to.be.revertedWith("Withdrawal fee exceeds allowed rate");
     });
 
     it("debe rechazar firma de un atacante no autorizado", async function () {

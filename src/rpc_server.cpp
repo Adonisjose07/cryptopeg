@@ -117,7 +117,7 @@ void RpcServer::setup_routes() {
                 {"withdraw_fee_bps", vault.get_withdraw_fee_bps()},
                 {"is_solvent_1_to_1", node_.audit_system()}
             }},
-            {"utxo_pool_count", node_.get_utxo_pool().size()}
+            {"utxo_pool_count", node_.get_utxo_pool_size()}
         };
         res.set_content(j.dump(2), "application/json");
     });
@@ -273,7 +273,8 @@ void RpcServer::setup_routes() {
             json outputs_j = json::array();
             json spent_outputs_j = json::array();
 
-            for (const auto& u : node_.get_utxo_pool()) {
+            const auto pool = node_.get_utxo_pool();
+            for (const auto& u : pool) {
                 if (StealthProtocol::scan_output(scan_wallet, u)) {
                     bool is_spent = false;
                     if (has_spend_priv) {
@@ -497,7 +498,8 @@ void RpcServer::setup_routes() {
             auto target_pub = from_hex(input_pub_hex);
             OneTimeOutput selected_utxo;
             bool found_utxo = false;
-            for (const auto& u : node_.get_utxo_pool()) {
+            const auto pool = node_.get_utxo_pool();
+            for (const auto& u : pool) {
                 if (sodium_memcmp(u.destination_one_time.data(), target_pub.data(), 32) == 0) {
                     selected_utxo = u;
                     found_utxo = true;
@@ -686,7 +688,8 @@ void RpcServer::setup_routes() {
             auto target_pub = from_hex(input_pub_hex);
             OneTimeOutput selected_utxo;
             bool found_utxo = false;
-            for (const auto& u : node_.get_utxo_pool()) {
+            const auto pool = node_.get_utxo_pool();
+            for (const auto& u : pool) {
                 if (sodium_memcmp(u.destination_one_time.data(), target_pub.data(), 32) == 0) {
                     selected_utxo = u;
                     found_utxo = true;
