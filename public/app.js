@@ -362,9 +362,8 @@ async function scanWalletBalance() {
       view_private_key: viewPriv,
       spend_public_key: spendPub
     };
-    if (spendPriv) {
-      payload.spend_private_key = spendPriv;
-    }
+    // Por seguridad no-custodial (V4-04), NUNCA transmitir spend_private_key por HTTP.
+    // El filtrado de salidas gastadas se realiza localmente en el navegador.
 
     const res = await fetch("/api/v1/wallet/scan", {
       method: "POST",

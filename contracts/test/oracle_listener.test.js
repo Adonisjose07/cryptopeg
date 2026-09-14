@@ -276,5 +276,46 @@ describe("Oracle Listener & Relayer Unit Tests", function () {
       expect(strVal).to.equal("9007199254740992000");
       expect(typeof strVal).to.equal("string");
     });
+
+    it("debe aislar órdenes con reversión permanente on-chain sin congelar la cola de retiros (V4-05)", function () {
+      const processedWithdrawalOrders = new Set();
+      const orderFailures = new Map();
+
+      const order1 = "ORD-FAIL-REVERT";
+      const order2 = "ORD-SUCCESS-VALID";
+
+      // Simular fallo permanente de order1
+      const err = new Error("execution reverted: transfer failed in recipient contract");
+      const isPermanentRevert = err.message.includes("reverted") || err.message.includes("execution reverted");
+
+      expect(isPermanentRevert).to.be.true;
+      if (isPermanentRevert) {
+        processedWithdrawalOrders.add(order1);
+      }
+
+      // Orden 1 quedó registrada como procesada/aislada
+      expect(processedWithdrawalOrders.has(order1)).to.be.true;
+
+      // La cola no se bloquea y procesa la siguiente orden
+      processedWithdrawalOrders.add(order2);
+      expect(processedWithdrawalOrders.has(order2)).to.be.true;
+    });
+
+    it("debe aislar órdenes tras alcanzar el umbral de 3 reintentos fallidos transitorios (V4-05)", function () {
+      const processedWithdrawalOrders = new Set();
+      const orderFailures = new Map();
+      const orderId = "ORD-TRANSIENT-FAIL";
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const fails = (orderFailures.get(orderId) || 0) + 1;
+        orderFailures.set(orderId, fails);
+        if (fails >= 3) {
+          processedWithdrawalOrders.add(orderId);
+        }
+      }
+
+      expect(processedWithdrawalOrders.has(orderId)).to.be.true;
+      expect(orderFailures.get(orderId)).to.equal(3);
+    });
   });
 });

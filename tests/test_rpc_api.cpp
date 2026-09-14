@@ -238,6 +238,24 @@ int main() {
     assert(b3_res["withdrawals"][0]["net_amount_raw"] == 298500000ULL);
     std::cout << "  [OK] Retiro verificado en bloque 3 con direccion de destino y monto raw exacto para el relayer L2.\n";
 
+    // 9b. Test DoS limit capping (V4-07)
+    std::cout << "[PASO 12b] Probando cota de seguridad contra DoS en GET /api/v1/chain/blocks?limit=999999...\n";
+    res = cli.Get("/api/v1/chain/blocks?limit=999999");
+    assert(res && res->status == 200);
+    auto blocks_limit_res = json::parse(res->body);
+    assert(blocks_limit_res["blocks"].size() <= 100);
+    std::cout << "  [OK] Cota de paginación verificada contra DoS (V4-07).\n";
+
+    // 9c. Test claim-fees authentication (V4-02)
+    std::cout << "[PASO 12c] Probando autenticación administrativa en POST /api/v1/vault/claim-fees...\n";
+    json claim_payload = {
+        {"amount_usdt", 1.0},
+        {"treasury_address", "0xTreasuryColdWallet"}
+    };
+    res = cli.Post("/api/v1/vault/claim-fees", claim_payload.dump(), "application/json");
+    assert(res && res->status == 401);
+    std::cout << "  [OK] Reclamo de comisiones no autenticado rechazado categóricamente con 401 Unauthorized (V4-02).\n";
+
     // 10. Apagado del Servidor
     std::cout << "[PASO 13] Deteniendo servidor RPC...\n";
     rpc.stop();

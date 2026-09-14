@@ -33,6 +33,7 @@ Node::Node(uint32_t deposit_fee_bps, uint32_t withdraw_fee_bps, const std::strin
                 std::memcpy(validator_pubkey_.data(), priv_bytes.data() + 32, 32);
                 has_validator_key_ = true;
             }
+            sodium_memzero(priv_bytes.data(), priv_bytes.size());
         } catch (...) {}
     }
     if (!has_validator_key_) {
@@ -60,6 +61,10 @@ Node::Node(uint32_t deposit_fee_bps, uint32_t withdraw_fee_bps, const std::strin
     }
 
     init_or_recover_database();
+}
+
+Node::~Node() {
+    sodium_memzero(validator_secret_key_.data(), validator_secret_key_.size());
 }
 
 void Node::set_validator_key(const uint8_t* secret_key_64, const Key256& pub_key_32) {
@@ -607,6 +612,9 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
                 }
 
                 db.commit_block(local_top, vault, new_utxos, spent_images);
+            }
+            if (!success) {
+                // Restaurar deterministamente el estado en memoria desde disco ante cualquier fallo (V4-09)
                 node.recover_state_from_db();
             }
         }
@@ -1077,8 +1085,13 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
         tx_history_.push_back(tx);
     }
 
-    // Persistir atómicamente en LMDB
-    db_.commit_block(block, vault_, new_utxos, spent_images);
+    // Persistir atómicamente en LMDB (V4-09)
+    try {
+        db_.commit_block(block, vault_, new_utxos, spent_images);
+    } catch (const std::exception& e) {
+        error_msg = "Fallo en persistencia LMDB commit_block: " + std::string(e.what());
+        return false;
+    }
 
     success = true;
     return true;

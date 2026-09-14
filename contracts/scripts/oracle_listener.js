@@ -15,11 +15,14 @@ const STATE_FILE = process.env.RELAYER_STATE_FILE || path.resolve(__dirname, "..
 // Helper para derivar par de claves Ed25519 para atestaciones criptográficas de depósito (Auditoría v3 - P0-01)
 function getEd25519KeyPair() {
   const seedHex = process.env.VALIDATOR_ED25519_PRIVKEY || process.env.VALIDATOR_PRIVATE_KEY || process.env.TESTNET_PRIVATE_KEY || "";
+  if (!seedHex) {
+    throw new Error("[ORACLE SECURITY CRITICAL] Clave de validador no configurada en VALIDATOR_ED25519_PRIVKEY o VALIDATOR_PRIVATE_KEY. Abortando por seguridad (V4-08).");
+  }
   let seed;
   if (seedHex.replace(/^0x/, "").length === 64) {
     seed = Buffer.from(seedHex.replace(/^0x/, ""), "hex");
   } else {
-    seed = crypto.createHash("sha256").update(seedHex || "cryptopeg_testnet_validator_seed").digest();
+    seed = crypto.createHash("sha256").update(seedHex).digest();
   }
   const privKey = crypto.createPrivateKey({
     key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]),
@@ -327,6 +330,9 @@ async function main() {
     return await vaultReadOnly.queryFilter("DepositInitiated", fromBlock, toBlock);
   }
 
+  // Mapa para rastrear reintentos fallidos y prevenir Head-of-Line Blocking (V4-05)
+  const orderFailures = new Map();
+
   // 2. Tarea: Sondeo y Relayer de Retiros C++ Daemon -> Arbitrum L2
   async function pollOutboundWithdrawals() {
     if (!vaultWithSigner || !validatorWallet) return;
@@ -462,13 +468,28 @@ async function main() {
                 console.log(`[ORACLE-RELAYER] Enlace Arbiscan: https://sepolia.arbiscan.io/tx/${tx.hash}\n`);
                 processedWithdrawalOrders.add(orderIdStr);
               } catch (txErr) {
-                if (txErr.message && txErr.message.includes("Withdrawal order already executed")) {
-                  console.log(`[ORACLE-RELAYER] Orden ${orderIdStr} ya fue ejecutada on-chain.`);
+                const errMsg = txErr.message || "";
+                const isPermanentRevert = errMsg.includes("Withdrawal order already executed") ||
+                                          errMsg.includes("reverted") ||
+                                          errMsg.includes("execution reverted") ||
+                                          errMsg.includes("CALL_EXCEPTION") ||
+                                          errMsg.includes("Invalid recipient") ||
+                                          errMsg.includes("ERC20:");
+
+                if (isPermanentRevert) {
+                  console.warn(`[ORACLE-RELAYER] [ALERTA] Orden ${orderIdStr} descartada por reversión permanente o ya ejecutada on-chain: ${errMsg}`);
                   processedWithdrawalOrders.add(orderIdStr);
                 } else {
-                  console.error(`[ORACLE-RELAYER] [ERROR] Fallo al ejecutar withdraw en Arbitrum:`, txErr.message);
-                  blockSucceeded = false;
-                  break;
+                  const fails = (orderFailures.get(orderIdStr) || 0) + 1;
+                  orderFailures.set(orderIdStr, fails);
+                  if (fails >= 3) {
+                    console.error(`[ORACLE-RELAYER] [CRÍTICO] Orden ${orderIdStr} aislada tras 3 intentos fallidos (${errMsg}). Desbloqueando cola (V4-05).`);
+                    processedWithdrawalOrders.add(orderIdStr);
+                  } else {
+                    console.error(`[ORACLE-RELAYER] [REINTENTO ${fails}/3] Fallo transitorio al ejecutar withdraw en Arbitrum:`, errMsg);
+                    blockSucceeded = false;
+                    break;
+                  }
                 }
               }
             }

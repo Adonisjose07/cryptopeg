@@ -14,6 +14,9 @@ namespace crypto {
 RpcServer::RpcServer(Node& node, const std::string& host, int port)
     : node_(node), host_(host), port_(port) {
     server_ = std::make_unique<httplib::Server>();
+    server_->set_payload_max_length(5 * 1024 * 1024); // 5 MB máx (V4-06)
+    server_->set_read_timeout(5, 0);                  // 5 segundos timeout lectura
+    server_->set_write_timeout(5, 0);                 // 5 segundos timeout escritura
     setup_routes();
 }
 
@@ -52,11 +55,13 @@ void RpcServer::stop() {
 }
 
 void RpcServer::setup_routes() {
-    // Configuración de cabeceras CORS
+    // Configuración de cabeceras CORS seguras (V4-11)
+    const char* env_cors = std::getenv("CORS_ALLOWED_ORIGIN");
+    std::string cors_origin = env_cors ? env_cors : "http://localhost:8080";
     server_->set_default_headers({
-        {"Access-Control-Allow-Origin", "*"},
+        {"Access-Control-Allow-Origin", cors_origin},
         {"Access-Control-Allow-Methods", "GET, POST, OPTIONS"},
-        {"Access-Control-Allow-Headers", "Content-Type, Authorization"}
+        {"Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Token"}
     });
 
     server_->Options(R"(.*)", [](const httplib::Request&, httplib::Response& res) {
@@ -124,6 +129,7 @@ void RpcServer::setup_routes() {
         if (req.has_param("limit")) {
             try { limit = std::stoull(req.get_param_value("limit")); } catch (...) {}
         }
+        if (limit > 100) limit = 100; // Cota superior de seguridad contra DoS (V4-07)
         if (req.has_param("offset")) {
             try { offset = std::stoull(req.get_param_value("offset")); } catch (...) {}
         }
@@ -247,6 +253,8 @@ void RpcServer::setup_routes() {
             }
             std::memcpy(scan_wallet.view_private_key.data(), v_bytes.data(), 32);
             std::memcpy(scan_wallet.spend_public_key.data(), s_bytes.data(), 32);
+            sodium_memzero(v_bytes.data(), v_bytes.size());
+            sodium_memzero(s_bytes.data(), s_bytes.size());
 
             bool has_spend_priv = false;
             if (body.contains("spend_private_key")) {
@@ -257,6 +265,7 @@ void RpcServer::setup_routes() {
                         std::memcpy(scan_wallet.spend_private_key.data(), sp_bytes.data(), 32);
                         has_spend_priv = true;
                     }
+                    sodium_memzero(sp_bytes.data(), sp_bytes.size());
                 }
             }
 
@@ -291,10 +300,11 @@ void RpcServer::setup_routes() {
                 }
             }
 
-            // Limpieza de memoria si se usó spend_private_key
+            // Limpieza de memoria (V4-11)
             if (has_spend_priv) {
                 secure_wipe(scan_wallet.spend_private_key);
             }
+            secure_wipe(scan_wallet.view_private_key);
 
             json j = {
                 {"total_balance_usdt", format_usdt(total_balance)},
@@ -472,10 +482,14 @@ void RpcServer::setup_routes() {
             auto sp_bytes = from_hex(spend_priv_hex);
             auto vp_bytes = from_hex(view_priv_hex);
             if (sp_bytes.size() != 32 || vp_bytes.size() != 32) {
+                sodium_memzero(sp_bytes.data(), sp_bytes.size());
+                sodium_memzero(vp_bytes.data(), vp_bytes.size());
                 throw std::invalid_argument("Claves de emisor deben tener 32 bytes.");
             }
             std::memcpy(sender.spend_private_key.data(), sp_bytes.data(), 32);
             std::memcpy(sender.view_private_key.data(), vp_bytes.data(), 32);
+            sodium_memzero(sp_bytes.data(), sp_bytes.size());
+            sodium_memzero(vp_bytes.data(), vp_bytes.size());
             crypto_scalarmult_ed25519_base_noclamp(sender.spend_public_key.data(), sender.spend_private_key.data());
             crypto_scalarmult_ed25519_base_noclamp(sender.view_public_key.data(), sender.view_private_key.data());
 
@@ -491,10 +505,14 @@ void RpcServer::setup_routes() {
                 }
             }
             if (!found_utxo) {
+                secure_wipe(sender.spend_private_key);
+                secure_wipe(sender.view_private_key);
                 throw std::runtime_error("No se encontró el UTXO de entrada especificado.");
             }
 
             auto tx = node_.transfer_shielded(sender, selected_utxo, recipient, send_amount, tx_fee);
+            secure_wipe(sender.spend_private_key);
+            secure_wipe(sender.view_private_key);
 
             json j = {
                 {"success", true},
@@ -649,10 +667,14 @@ void RpcServer::setup_routes() {
             auto sp_bytes = from_hex(spend_priv_hex);
             auto vp_bytes = from_hex(view_priv_hex);
             if (sp_bytes.size() != 32 || vp_bytes.size() != 32) {
+                sodium_memzero(sp_bytes.data(), sp_bytes.size());
+                sodium_memzero(vp_bytes.data(), vp_bytes.size());
                 throw std::invalid_argument("Claves de emisor deben tener 32 bytes.");
             }
             std::memcpy(burner.spend_private_key.data(), sp_bytes.data(), 32);
             std::memcpy(burner.view_private_key.data(), vp_bytes.data(), 32);
+            sodium_memzero(sp_bytes.data(), sp_bytes.size());
+            sodium_memzero(vp_bytes.data(), vp_bytes.size());
             crypto_scalarmult_ed25519_base_noclamp(burner.spend_public_key.data(), burner.spend_private_key.data());
             crypto_scalarmult_ed25519_base_noclamp(burner.view_public_key.data(), burner.view_private_key.data());
 
@@ -667,10 +689,14 @@ void RpcServer::setup_routes() {
                 }
             }
             if (!found_utxo) {
+                secure_wipe(burner.spend_private_key);
+                secure_wipe(burner.view_private_key);
                 throw std::runtime_error("No se encontró el UTXO de retiro especificado.");
             }
 
             auto plan = node_.withdraw_shielded(burner, selected_utxo, withdraw_amount, destination_wallet, true);
+            secure_wipe(burner.spend_private_key);
+            secure_wipe(burner.view_private_key);
 
             json routes_j = json::array();
             for (const auto& r : plan.routes) {
@@ -699,9 +725,25 @@ void RpcServer::setup_routes() {
         }
     });
 
-    // 10. Cobro de Comisiones de Tesorería (Administración del Protocolo)
+    // 10. Cobro de Comisiones de Tesorería (Administración del Protocolo V4-02)
     server_->Post("/api/v1/vault/claim-fees", [this](const httplib::Request& req, httplib::Response& res) {
         try {
+            const char* env_admin_token = std::getenv("ADMIN_AUTH_TOKEN");
+            std::string expected_admin = env_admin_token ? env_admin_token : "";
+            std::string auth_header = req.get_header_value("X-Admin-Token");
+            if (auth_header.empty()) {
+                auth_header = req.get_header_value("Authorization");
+                if (auth_header.rfind("Bearer ", 0) == 0) {
+                    auth_header = auth_header.substr(7);
+                }
+            }
+            if (expected_admin.empty() || auth_header.size() != expected_admin.size() ||
+                sodium_memcmp(auth_header.data(), expected_admin.data(), expected_admin.size()) != 0) {
+                res.status = 401;
+                res.set_content(json{{"error", "No autorizado: se requiere un token administrativo valido en X-Admin-Token o Authorization."}}.dump(), "application/json");
+                return;
+            }
+
             auto body = json::parse(req.body);
             double amount_val = body.at("amount_usdt").get<double>();
             std::string treasury_addr = body.at("treasury_address").get<std::string>();
@@ -817,8 +859,10 @@ void RpcServer::setup_routes() {
             auto bytes = from_hex(hex_str);
             Block blk = Block::deserialize(bytes.data(), bytes.size());
 
-            if (blk.header.height <= node_.get_blockchain_height()) {
-                res.set_content(json{{"status", "ignored"}, {"reason", "already_have_height"}}.dump(), "application/json");
+            // Solo ignorar si el bloque es estrictamente anterior a la punta local (V4-01)
+            // Si blk.header.height == current_height, permitir que apply_remote_block evalúe Fork-Choice por quórum
+            if (blk.header.height < node_.get_blockchain_height()) {
+                res.set_content(json{{"status", "ignored"}, {"reason", "older_than_tip"}}.dump(), "application/json");
                 return;
             }
 
@@ -854,6 +898,7 @@ void RpcServer::setup_routes() {
             if (req.has_param("limit")) {
                 limit = std::stoul(req.get_param_value("limit"));
             }
+            if (limit > 100) limit = 100; // Cota de seguridad contra DoS (V4-07)
 
             uint64_t top_h = node_.get_blockchain_height();
             json blocks_j = json::array();

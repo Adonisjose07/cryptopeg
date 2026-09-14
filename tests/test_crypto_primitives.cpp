@@ -3,6 +3,7 @@
 #include "pedersen.hpp"
 #include "types.hpp"
 #include "block.hpp"
+#include "tumbler.hpp"
 #include <cassert>
 #include <iostream>
 #include <cstring>
@@ -145,14 +146,6 @@ int main() {
         auto sig = crypto::RingSignatureEngine::sign(msg_hash, {pub}, 0, priv);
         CHECK(crypto::RingSignatureEngine::verify(msg_hash, sig), "Firma 1-de-1 debe ser válida");
 
-        // 1. Punto de torsión puro no trivial (orden 8 en Ed25519)
-        static const unsigned char torsion_point_8[32] = {
-            0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0,
-            0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0,
-            0xd5, 0xd5, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39,
-            0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x05
-        };
-        // O multiplicar punto de torsión conocido de orden 8
         // Punto de torsión de orden 8 en formato Ed25519:
         static const unsigned char torsion_8_canonical[32] = {
             0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f,
@@ -499,6 +492,33 @@ int main() {
               "Atestación con monto alterado debe fallar verificación criptográfica");
 
         std::cout << "  [OK] Certificado criptográfico de depósito con firma Ed25519 verificado al 100%.\n";
+    }
+
+    // -------------------------------------------------------------
+    // TEST 11: Particionado Seguro en Tumbler sin Underflow (V4-10)
+    // -------------------------------------------------------------
+    std::cout << "\n[TEST 11] Particionado en Tumbler sin Underflow (partition_amount)...\n";
+    {
+        crypto::TumblerEngine tumbler;
+        // Caso límite: monto igual a 5 (mínimo de fragmentos)
+        auto plan_min = tumbler.plan_withdrawal_tumbling("ORD-MIN-1", 5, 0, 5, "0xDest");
+        crypto::Amount sum_min = 0;
+        for (const auto& r : plan_min.routes) {
+            CHECK(r.fragment_amount >= 1, "Cada fragmento debe ser al menos 1");
+            sum_min += r.fragment_amount;
+        }
+        CHECK(sum_min == 5, "Suma de fragmentos minimos debe ser exactamente 5");
+
+        // Caso estándar con monto fraccionario grande
+        crypto::Amount large_amount = 987654321ULL;
+        auto plan_large = tumbler.plan_withdrawal_tumbling("ORD-LARGE-2", large_amount, 0, large_amount, "0xDest");
+        crypto::Amount sum_large = 0;
+        for (const auto& r : plan_large.routes) {
+            CHECK(r.fragment_amount > 0, "Fragmento debe ser estrictamente positivo");
+            sum_large += r.fragment_amount;
+        }
+        CHECK(sum_large == large_amount, "Suma de fragmentos grandes debe coincidir exactamente");
+        std::cout << "  [OK] Particionado seguro en Tumbler sin underflow y con suma exacta verificado al 100%.\n";
     }
 
     std::cout << "\n=================================================================\n";

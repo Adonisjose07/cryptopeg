@@ -128,7 +128,7 @@
           <div class="flex items-center space-x-2.5">
             <h1 class="text-lg font-bold tracking-tight text-[#F9FAFB]">CryptoPeg <span class="text-[#00A76F]">USDT</span></h1>
             <span class="text-[10px] uppercase font-bold tracking-wider bg-[#8E33FF]/15 text-[#8E33FF] border border-[#8E33FF]/30 px-2.5 py-0.5 rounded-full">RingCT v2.0 • DKSAP</span>
-            <span id="wasm-badge" class="text-[10px] uppercase font-bold tracking-wider bg-[#00A76F]/15 text-[#00A76F] border border-[#00A76F]/30 px-2.5 py-0.5 rounded-full inline-flex items-center"><span class="w-1.5 h-1.5 rounded-full bg-[#00A76F] mr-1"></span>Wasm No-Custodial</span>
+            <span id="wasm-badge" class="text-[10px] uppercase font-bold tracking-wider bg-[#919EAB]/15 text-[#919EAB] border border-[#919EAB]/30 px-2.5 py-0.5 rounded-full inline-flex items-center"><span class="w-1.5 h-1.5 rounded-full bg-[#919EAB] mr-1"></span>Verificando Entorno...</span>
           </div>
           <p class="text-xs text-[#919EAB]">Bóveda Solvente 1:1 • Arbitrum L2 • Almacenamiento LMDB ACID</p>
         </div>
@@ -854,6 +854,7 @@
     </div>
   </div>
 
+  <script src="/wasm/cryptopeg_crypto.js" onerror="console.info('Wasm module not bundled; falling back to client API.')"></script>
   <script src="/app.js"></script>
 </body>
 </html>

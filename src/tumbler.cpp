@@ -34,25 +34,17 @@ std::vector<Amount> TumblerEngine::partition_amount(Amount total_amount, size_t 
         sum_weights += weights[i];
     }
 
-    std::vector<Amount> fragments(count);
-    Amount running_sum = 0;
+    std::vector<Amount> fragments(count, 1);
+    Amount remaining = total_amount - count; // Reservar 1 unidad minima por fragmento sin riesgo de underflow
 
     for (size_t i = 0; i < count - 1; ++i) {
         double ratio = weights[i] / sum_weights;
-        Amount part = static_cast<Amount>(total_amount * ratio);
-        if (part == 0) part = 1;
-        fragments[i] = part;
-        running_sum += part;
+        Amount add = static_cast<Amount>(remaining * ratio);
+        fragments[i] += add;
+        remaining -= add;
     }
-
-    // El último fragmento absorbe la diferencia exacta para garantizar 0% de redondeo
-    if (running_sum < total_amount) {
-        fragments[count - 1] = total_amount - running_sum;
-    } else {
-        // En caso excepcional de sobregiro por redondeo hacia arriba
-        fragments[count - 1] = 1;
-        fragments[0] = fragments[0] - (running_sum + 1 - total_amount);
-    }
+    // El último fragmento absorbe todo el remanente exacto
+    fragments[count - 1] += remaining;
 
     return fragments;
 }

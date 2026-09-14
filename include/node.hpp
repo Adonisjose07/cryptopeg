@@ -25,6 +25,7 @@ public:
         uint32_t withdraw_fee_bps = 50,
         const std::string& db_path = "./data/lmdb"
     );
+    ~Node();
 
     // 1. Compra de cripto con USDT: acuñación 1:1 menos comisión que va al pool + Asentamiento en bloque LMDB
     DepositReceipt buy_shielded(
