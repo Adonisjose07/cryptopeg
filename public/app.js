@@ -29,12 +29,12 @@ async function initWasmCrypto() {
 function updateWasmBadge(active) {
   const badge = document.getElementById("wasm-badge");
   if (badge) {
-    if (active) {
+    if (active && isWasmLoaded) {
       badge.className = "text-[10px] uppercase font-bold tracking-wider bg-[#00A76F]/15 text-[#00A76F] border border-[#00A76F]/30 px-2.5 py-0.5 rounded-full inline-flex items-center";
-      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-[#00A76F] mr-1 animate-pulse"></span>Wasm No-Custodial`;
+      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-[#00A76F] mr-1"></span>Wasm SDK Listo`;
     } else {
-      badge.className = "text-[10px] uppercase font-bold tracking-wider bg-[#919EAB]/15 text-[#919EAB] border border-[#919EAB]/30 px-2.5 py-0.5 rounded-full inline-flex items-center";
-      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-[#919EAB] mr-1"></span>Nodo Local 127.0.0.1`;
+      badge.className = "text-[10px] uppercase font-bold tracking-wider bg-[#00B8D9]/15 text-[#00B8D9] border border-[#00B8D9]/30 px-2.5 py-0.5 rounded-full inline-flex items-center";
+      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-[#00B8D9] mr-1"></span>Daemon Local 127.0.0.1`;
     }
   }
 }

@@ -380,6 +380,11 @@ TumblingPlan Node::withdraw_shielded(
 ) {
     std::lock_guard<std::mutex> lock(node_mutex_);
 
+    // 0. Validar dirección de destino EVM pública (AUD-CP-03)
+    if (!is_valid_evm_address(destination_public_usdt)) {
+        throw std::invalid_argument("Direccion publica de destino invalida: debe ser una direccion EVM valida (0x + 40 caracteres hex, distinta de cero).");
+    }
+
     // 1. Validar propiedad del output
     if (!StealthProtocol::scan_output(burner_wallet, input_utxo)) {
         throw std::runtime_error("La billetera no es dueña del output a retirar.");
@@ -531,6 +536,7 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
     // Regla determinista de Fork-Choice y resolución canónica de bifurcaciones (P1-05):
     bool is_reorg = false;
     Block local_top;
+    Vault local_vault_before_rollback = vault_; // Preservar copia íntegra del estado contable de la bóveda (AUD-CP-01)
     if (block.header.height == current_height && current_height > 0) {
         if (!db_.get_block_by_height(current_height, local_top)) {
             error_msg = "Error interno: no se pudo recuperar el bloque local en la punta.";
@@ -585,7 +591,7 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
         bool& success;
         Block& local_top;
         BlockchainDB& db;
-        Vault& vault;
+        Vault saved_vault;
         Node& node;
         ~ReorgGuard() {
             if (is_reorg && !success) {
@@ -611,14 +617,16 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
                     new_utxos.push_back(out);
                 }
 
-                db.commit_block(local_top, vault, new_utxos, spent_images);
+                // AUD-CP-01: Restaurar el bloque previo con su estado contable original intacto (saved_vault)
+                // en lugar de vault_ (que fue revertido a la altura N-1 por recover_state_from_db)
+                db.commit_block(local_top, saved_vault, new_utxos, spent_images);
             }
             if (!success) {
                 // Restaurar deterministamente el estado en memoria desde disco ante cualquier fallo (V4-09)
                 node.recover_state_from_db();
             }
         }
-    } reorg_guard{is_reorg, success, local_top, db_, vault_, *this};
+    } reorg_guard{is_reorg, success, local_top, db_, local_vault_before_rollback, *this};
 
     auto fail = [&](const std::string& msg) -> bool {
         error_msg = msg;
@@ -954,9 +962,9 @@ bool Node::apply_remote_block(const Block& block, std::string& error_msg) {
             return false;
         }
 
-        // 3.2 Validación de dirección destino pública
-        if (wdr.destination_address.empty()) {
-            error_msg = "Direccion publica de destino para retiro no puede estar vacia.";
+        // 3.2 Validación de dirección destino pública EVM (AUD-CP-03)
+        if (!is_valid_evm_address(wdr.destination_address)) {
+            error_msg = "Retiro rechazado: destination_address debe ser una direccion EVM valida (0x + 40 caracteres hex, distinta de cero).";
             return false;
         }
 

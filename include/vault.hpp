@@ -39,6 +39,30 @@ class Vault {
 public:
     explicit Vault(uint32_t deposit_fee_bps = 50, uint32_t withdraw_fee_bps = 50);
 
+    // Constructor de copia explícito (std::mutex no es copiable) (AUD-CP-01)
+    Vault(const Vault& other) {
+        std::lock_guard<std::mutex> lock(other.mutex_);
+        total_collateral_ = other.total_collateral_;
+        circulating_supply_ = other.circulating_supply_;
+        fee_pool_reserve_ = other.fee_pool_reserve_;
+        deposit_fee_bps_ = other.deposit_fee_bps_;
+        withdraw_fee_bps_ = other.withdraw_fee_bps_;
+    }
+
+    Vault& operator=(const Vault& other) {
+        if (this != &other) {
+            std::unique_lock<std::mutex> lock1(mutex_, std::defer_lock);
+            std::unique_lock<std::mutex> lock2(other.mutex_, std::defer_lock);
+            std::lock(lock1, lock2);
+            total_collateral_ = other.total_collateral_;
+            circulating_supply_ = other.circulating_supply_;
+            fee_pool_reserve_ = other.fee_pool_reserve_;
+            deposit_fee_bps_ = other.deposit_fee_bps_;
+            withdraw_fee_bps_ = other.withdraw_fee_bps_;
+        }
+        return *this;
+    }
+
     // Depósito de USDT público -> Deducción comisión -> Acuñación de tokens privados 1:1
     DepositReceipt deposit(Amount usdt_gross, const std::string& custom_tx_hash = "");
 
@@ -52,6 +76,7 @@ public:
     Amount get_total_collateral() const;
     Amount get_circulating_shielded_supply() const;
     Amount get_fee_pool_reserve() const;
+    Amount get_accumulated_fees() const { return get_fee_pool_reserve(); }
 
     // Verificación matemática de solvencia estricta (1:1 backing)
     // Collateral == Circulating Supply + Pool Reserve

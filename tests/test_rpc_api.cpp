@@ -199,7 +199,7 @@ int main() {
         {"burner_view_private_key", bob_j["view_private_key"]},
         {"input_utxo_pubkey", bob_utxo_pub},
         {"tokens_to_withdraw", 300.0},
-        {"destination_public_usdt", "0xBobExternalColdStorageWallet999"}
+        {"destination_public_usdt", "0xb0b0000000000000000000000000000000000001"}
     };
     res = cli.Post("/api/v1/vault/withdraw", wdr_req.dump(), "application/json");
     assert(res && res->status == 200);
@@ -234,7 +234,7 @@ int main() {
     auto b3_res = json::parse(res->body);
     assert(b3_res["height"] == 3);
     assert(b3_res["withdrawals"].size() == 1);
-    assert(b3_res["withdrawals"][0]["destination"] == "0xBobExternalColdStorageWallet999");
+    assert(b3_res["withdrawals"][0]["destination"] == "0xb0b0000000000000000000000000000000000001");
     assert(b3_res["withdrawals"][0]["net_amount_raw"] == 298500000ULL);
     std::cout << "  [OK] Retiro verificado en bloque 3 con direccion de destino y monto raw exacto para el relayer L2.\n";
 

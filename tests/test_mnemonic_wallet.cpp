@@ -126,7 +126,7 @@ int main() {
     std::cout << "\n  -> Bob solicita retiro de 10 USDT hacia dirección pública...\n";
     std::string order_id;
     size_t fragments = 0;
-    bool wdr_ok = bob.withdraw(10 * crypto::USDT_UNIT, "0xBobExternalTetherAddress123", order_id, fragments, err);
+    bool wdr_ok = bob.withdraw(10 * crypto::USDT_UNIT, "0xb0b0000000000000000000000000000000000001", order_id, fragments, err);
     assert(wdr_ok);
     assert(!order_id.empty());
     assert(fragments > 0);

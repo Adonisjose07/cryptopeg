@@ -660,6 +660,11 @@ void RpcServer::setup_routes() {
             std::string input_pub_hex = body.at("input_utxo_pubkey").get<std::string>();
             double withdraw_val = body.at("tokens_to_withdraw").get<double>();
             std::string destination_wallet = body.at("destination_public_usdt").get<std::string>();
+            if (!is_valid_evm_address(destination_wallet)) {
+                res.status = 400;
+                res.set_content(json{{"error", "Direccion de destino invalida: debe ser una direccion EVM valida (0x + 40 caracteres hex, distinta de cero)."}}.dump(2), "application/json");
+                return;
+            }
 
             Amount withdraw_amount = parse_usdt(withdraw_val);
 

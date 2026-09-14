@@ -128,6 +128,7 @@ Key256 MnemonicEngine::mnemonic_to_entropy(const std::string& phrase) {
 
     Key256 entropy;
     std::memcpy(entropy.data(), bits_stream.data(), 32);
+    sodium_memzero(bits_stream.data(), bits_stream.size());
     return entropy;
 }
 

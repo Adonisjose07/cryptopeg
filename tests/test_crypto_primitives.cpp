@@ -521,6 +521,27 @@ int main() {
         std::cout << "  [OK] Particionado seguro en Tumbler sin underflow y con suma exacta verificado al 100%.\n";
     }
 
+    // -------------------------------------------------------------
+    // TEST 12: Validación Canónica de Direcciones EVM en Retiros (AUD-CP-03)
+    // -------------------------------------------------------------
+    std::cout << "\n[TEST 12] Validación Canónica de Direcciones EVM en Retiros (AUD-CP-03)...\n";
+    {
+        // Válida estándar minúsculas
+        CHECK(crypto::is_valid_evm_address("0x9d59867efe155406f637f028997866f252dcc72c"), "Direccion EVM valida en minusculas debe ser aceptada");
+        // Válida con mayúsculas (Checksum / EIP-55)
+        CHECK(crypto::is_valid_evm_address("0x9d59867EfE155406f637F028997866f252dcc72c"), "Direccion EVM con mayusculas debe ser aceptada");
+
+        // Casos inválidos
+        CHECK(!crypto::is_valid_evm_address("0x0000000000000000000000000000000000000000"), "Direccion cero (address 0) debe ser rechazada");
+        CHECK(!crypto::is_valid_evm_address(""), "Cadena vacia debe ser rechazada");
+        CHECK(!crypto::is_valid_evm_address("0x123"), "Direccion corta debe ser rechazada");
+        CHECK(!crypto::is_valid_evm_address("0x9d59867efe155406f637f028997866f252dcc72c99"), "Direccion larga debe ser rechazada");
+        CHECK(!crypto::is_valid_evm_address("9d59867efe155406f637f028997866f252dcc72c"), "Direccion sin prefijo 0x debe ser rechazada");
+        CHECK(!crypto::is_valid_evm_address("0x9d59867efe155406f637f028997866f252dcc72z"), "Direccion con caracter no hex ('z') debe ser rechazada");
+
+        std::cout << "  [OK] Validación sintáctica canónica de direcciones EVM verificada al 100% (AUD-CP-03).\n";
+    }
+
     std::cout << "\n=================================================================\n";
     std::cout << "  [EXITO TOTAL] Todos los tests criptográficos pasaron al 100%!  \n";
     std::cout << "=================================================================\n";

@@ -163,4 +163,17 @@ inline Hash256 compute_deposit_attestation_hash(
     return h;
 }
 
+// Validación canónica de dirección pública EVM (0x + 40 caracteres hexadecimales, no-cero) (AUD-CP-03)
+inline bool is_valid_evm_address(const std::string& addr) {
+    if (addr.size() != 42) return false;
+    if (addr[0] != '0' || (addr[1] != 'x' && addr[1] != 'X')) return false;
+    bool all_zero = true;
+    for (size_t i = 2; i < 42; ++i) {
+        if (!std::isxdigit(static_cast<unsigned char>(addr[i]))) return false;
+        if (addr[i] != '0') all_zero = false;
+    }
+    if (all_zero) return false; // Rechazar address(0)
+    return true;
+}
+
 } // namespace crypto

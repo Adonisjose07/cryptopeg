@@ -375,7 +375,7 @@ int main() {
         evil_wdr.gross_tokens_burned = 100 * crypto::USDT_UNIT;
         evil_wdr.fee_to_pool = 500'000ULL;
         evil_wdr.net_usdt_to_tumble = 99'500'000ULL;
-        evil_wdr.destination_address = "0xAttackerDest";
+        evil_wdr.destination_address = "0x1111222233334444555566667777888899990001";
         evil_wdr.burned_utxo_pubkey = fake_out.destination_one_time;
 
         // Clave legítima de cambio autorizada por el dueño
@@ -488,6 +488,10 @@ int main() {
         crypto::Block safe_top_block;
         assert(node2.get_block(safe_top_h, safe_top_block));
 
+        crypto::Amount expected_collateral_before = node2.get_vault().get_total_collateral();
+        crypto::Amount expected_circulating_before = node2.get_vault().get_circulating_shielded_supply();
+        crypto::Amount expected_fees_before = node2.get_vault().get_accumulated_fees();
+
         crypto::Block evil_reorg_block;
         evil_reorg_block.header.height = safe_top_h;
         evil_reorg_block.header.prev_block_hash = safe_top_block.header.prev_block_hash;
@@ -514,11 +518,14 @@ int main() {
         assert(!evil_reorg_accepted);
         std::cout << "  [OK] Bloque competidor inválido rechazado: " << err_evil_reorg << "\n";
 
-        // Verificar que ReorgGuard restauró el bloque seguro localmente
+        // Verificar que ReorgGuard restauró el bloque seguro localmente y su balance contable exacto (AUD-CP-01)
         assert(node2.get_blockchain_height() == safe_top_h);
         assert(crypto::to_hex(node2.get_top_block_hash()) == crypto::to_hex(safe_top_hash));
+        assert(node2.get_vault().get_total_collateral() == expected_collateral_before);
+        assert(node2.get_vault().get_circulating_shielded_supply() == expected_circulating_before);
+        assert(node2.get_vault().get_accumulated_fees() == expected_fees_before);
         assert(node2.audit_system());
-        std::cout << "  [OK] ReorgGuard restauró el bloque legítimo, la solvencia contable y los UTXOs sin pérdida.\n";
+        std::cout << "  [OK] ReorgGuard restauró el bloque legítimo, la solvencia contable intacta (AUD-CP-01) y los UTXOs sin pérdida.\n";
     }
 
     cleanup_test_dir(test_db_path);
