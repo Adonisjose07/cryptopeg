@@ -159,7 +159,9 @@ int main() {
     auto tx_res = json::parse(res->body);
     assert(tx_res["success"] == true);
     assert(tx_res["block_height"] == 2);
-    assert(tx_res["ring_size"] == 5);
+    // Solo existen outputs reales como señuelos. En este fixture inicial no hay
+    // otro output histórico de la misma denominación, por lo que el anillo es N=1.
+    assert(tx_res["ring_size"] == 1);
     std::cout << "  [OK] Transferencia privada minada en Bloque #2. Ring Size: " << tx_res["ring_size"] << "\n";
 
     // 7b. Test Wallet Scan for Alice (Post-Transfer con filtrado de UTXOs gastados)
