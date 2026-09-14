@@ -301,8 +301,13 @@ describe("CryptoPegVault (V1) Unit & Security Tests", function () {
       expect(await vault.paused()).to.be.false;
     });
 
-    it("getCirculatingBacking debe retornar 0 si total balance <= accumulatedFees", async function () {
+    it("getCirculatingBacking debe calcular el respaldo y retornar 0 si total balance <= accumulatedFees (QA-GAP-01)", async function () {
       expect(await vault.getCirculatingBacking()).to.be.gt(0);
+
+      // Desplegar una bóveda sin depósitos (balance 0 <= fees 0) para activar la rama de retorno 0
+      const VaultFactory = await ethers.getContractFactory("CryptoPegVault");
+      const emptyVault = await VaultFactory.deploy(await usdt.getAddress(), validator.address, 50, 50, owner.address);
+      expect(await emptyVault.getCirculatingBacking()).to.equal(0);
     });
   });
 });

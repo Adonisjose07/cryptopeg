@@ -86,6 +86,7 @@ describe("Oracle Listener & Relayer Unit Tests", function () {
         lastCheckedChainHeight: state.lastCheckedChainHeight,
         processedTxHashes: Array.from(state.processedTxHashes).slice(-5000),
         processedWithdrawalOrders: Array.from(state.processedWithdrawalOrders).slice(-5000),
+        quarantinedWithdrawalOrders: Array.from(state.quarantinedWithdrawalOrders || []).slice(-5000),
         updatedAt: new Date().toISOString()
       };
       fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
@@ -99,23 +100,26 @@ describe("Oracle Listener & Relayer Unit Tests", function () {
           lastCheckedL2Block: Number(data.lastCheckedL2Block || 0),
           lastCheckedChainHeight: Number(data.lastCheckedChainHeight || 0),
           processedTxHashes: new Set(data.processedTxHashes || []),
-          processedWithdrawalOrders: new Set(data.processedWithdrawalOrders || [])
+          processedWithdrawalOrders: new Set(data.processedWithdrawalOrders || []),
+          quarantinedWithdrawalOrders: new Set(data.quarantinedWithdrawalOrders || [])
         };
       }
       return {
         lastCheckedL2Block: 0,
         lastCheckedChainHeight: 0,
         processedTxHashes: new Set(),
-        processedWithdrawalOrders: new Set()
+        processedWithdrawalOrders: new Set(),
+        quarantinedWithdrawalOrders: new Set()
       };
     }
 
-    it("debe persistir y recuperar estado de forma consistente", function () {
+    it("debe persistir y recuperar estado de forma consistente (incluyendo DLQ de retiros)", function () {
       const state = {
         lastCheckedL2Block: 123456,
         lastCheckedChainHeight: 42,
         processedTxHashes: new Set(["0xabc", "0xdef"]),
-        processedWithdrawalOrders: new Set(["ord-1", "ord-2"])
+        processedWithdrawalOrders: new Set(["ord-1", "ord-2"]),
+        quarantinedWithdrawalOrders: new Set(["ord-quarantine-1"])
       };
 
       saveState(TEST_TMP_STATE, state);
@@ -126,6 +130,7 @@ describe("Oracle Listener & Relayer Unit Tests", function () {
       expect(loaded.processedTxHashes.has("0xabc")).to.be.true;
       expect(loaded.processedTxHashes.has("0xdef")).to.be.true;
       expect(loaded.processedWithdrawalOrders.has("ord-1")).to.be.true;
+      expect(loaded.quarantinedWithdrawalOrders.has("ord-quarantine-1")).to.be.true;
     });
 
     it("debe truncar a los últimos 5,000 elementos para evitar desbordamiento de memoria", function () {
@@ -301,8 +306,9 @@ describe("Oracle Listener & Relayer Unit Tests", function () {
       expect(processedWithdrawalOrders.has(order2)).to.be.true;
     });
 
-    it("debe aislar órdenes tras alcanzar el umbral de 3 reintentos fallidos transitorios (V4-05)", function () {
+    it("debe aislar órdenes tras alcanzar el umbral de 3 reintentos fallidos transitorios en Dead Letter Queue (V4-05 / CP-SEC-01)", function () {
       const processedWithdrawalOrders = new Set();
+      const quarantinedWithdrawalOrders = new Set();
       const orderFailures = new Map();
       const orderId = "ORD-TRANSIENT-FAIL";
 
@@ -310,11 +316,13 @@ describe("Oracle Listener & Relayer Unit Tests", function () {
         const fails = (orderFailures.get(orderId) || 0) + 1;
         orderFailures.set(orderId, fails);
         if (fails >= 3) {
-          processedWithdrawalOrders.add(orderId);
+          quarantinedWithdrawalOrders.add(orderId);
         }
       }
 
-      expect(processedWithdrawalOrders.has(orderId)).to.be.true;
+      // La orden fallida debe estar en la cola de cuarentena (DLQ) y NO en órdenes procesadas exitosamente
+      expect(quarantinedWithdrawalOrders.has(orderId)).to.be.true;
+      expect(processedWithdrawalOrders.has(orderId)).to.be.false;
       expect(orderFailures.get(orderId)).to.equal(3);
     });
   });

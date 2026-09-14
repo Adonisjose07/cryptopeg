@@ -346,8 +346,13 @@ describe("CryptoPegVaultV2 (EIP-712 & Dual Fallback) Unit & Security Tests", fun
       expect(await vault.paused()).to.be.false;
     });
 
-    it("getCirculatingBacking debe retornar 0 si total balance <= accumulatedFees", async function () {
+    it("getCirculatingBacking debe calcular el respaldo y retornar 0 si total balance <= accumulatedFees (QA-GAP-01)", async function () {
       expect(await vault.getCirculatingBacking()).to.be.gt(0);
+
+      // Desplegar una bóveda sin depósitos (balance 0 <= fees 0) para activar la rama de retorno 0
+      const VaultFactoryV2 = await ethers.getContractFactory("CryptoPegVaultV2");
+      const emptyVault = await VaultFactoryV2.deploy(await usdt.getAddress(), validator.address, 50, 50, owner.address);
+      expect(await emptyVault.getCirculatingBacking()).to.equal(0);
     });
   });
 });

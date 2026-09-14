@@ -211,6 +211,14 @@ int main() {
     std::cout << "  -> Orden: " << wdr_res["order_id"] << "\n";
     std::cout << "  -> Micro-fragmentos anonimizados generados: " << wdr_res["total_micro_fragments"] << "\n";
 
+    // 8b. Test Withdrawal rejection on invalid EVM address (AUD-CP-03 / QA-GAP-04)
+    std::cout << "[PASO 9b] Probando rechazo de dirección EVM inválida en POST /api/v1/vault/withdraw...\n";
+    json wdr_invalid = wdr_req;
+    wdr_invalid["destination_public_usdt"] = "0xInvalidShortAddr";
+    res = cli.Post("/api/v1/vault/withdraw", wdr_invalid.dump(), "application/json");
+    assert(res && res->status == 400);
+    std::cout << "  [OK] Retiro con dirección EVM inválida rechazado categóricamente con 400 Bad Request.\n";
+
     // 9. Test Chain Exploration
     std::cout << "[PASO 10] Probando GET /api/v1/chain/blocks...\n";
     res = cli.Get("/api/v1/chain/blocks?limit=10");

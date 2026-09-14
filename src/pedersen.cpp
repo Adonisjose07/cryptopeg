@@ -5,13 +5,21 @@
 namespace crypto {
 
 static Key256 init_generator_H() {
-    Key256 H;
+    Key256 H_raw;
     const char* seed = "CryptoPegUSDT_RingCT_Pedersen_Generator_H_Point";
     uint8_t hash[crypto_core_ed25519_UNIFORMBYTES];
     crypto_generichash(hash, sizeof(hash), reinterpret_cast<const uint8_t*>(seed), std::strlen(seed), nullptr, 0);
 
-    if (crypto_core_ed25519_from_uniform(H.data(), hash) != 0) {
+    if (crypto_core_ed25519_from_uniform(H_raw.data(), hash) != 0) {
         throw std::runtime_error("Fallo al derivar punto generador H de Pedersen.");
+    }
+
+    // Limpiar cofactor 8 multiplicando por 8 para asegurar que H resida estrictamente en el subgrupo de orden primo L (CP-SEC-03)
+    static const unsigned char eight_scalar[32] = {8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    Key256 H;
+    if (crypto_scalarmult_ed25519_noclamp(H.data(), eight_scalar, H_raw.data()) != 0) {
+        throw std::runtime_error("Fallo al multiplicar por cofactor 8 en generador H de Pedersen.");
     }
     return H;
 }

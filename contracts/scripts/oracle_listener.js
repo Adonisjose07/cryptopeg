@@ -151,7 +151,8 @@ async function main() {
           lastCheckedL2Block: Number(data.lastCheckedL2Block || 0),
           lastCheckedChainHeight: Number(data.lastCheckedChainHeight || 0),
           processedTxHashes: new Set(data.processedTxHashes || []),
-          processedWithdrawalOrders: new Set(data.processedWithdrawalOrders || [])
+          processedWithdrawalOrders: new Set(data.processedWithdrawalOrders || []),
+          quarantinedWithdrawalOrders: new Set(data.quarantinedWithdrawalOrders || [])
         };
       }
     } catch (e) {
@@ -161,7 +162,8 @@ async function main() {
       lastCheckedL2Block: 0,
       lastCheckedChainHeight: 0,
       processedTxHashes: new Set(),
-      processedWithdrawalOrders: new Set()
+      processedWithdrawalOrders: new Set(),
+      quarantinedWithdrawalOrders: new Set()
     };
   }
 
@@ -176,6 +178,7 @@ async function main() {
         lastCheckedChainHeight: state.lastCheckedChainHeight,
         processedTxHashes: Array.from(state.processedTxHashes).slice(-5000),
         processedWithdrawalOrders: Array.from(state.processedWithdrawalOrders).slice(-5000),
+        quarantinedWithdrawalOrders: Array.from(state.quarantinedWithdrawalOrders || []).slice(-5000),
         updatedAt: new Date().toISOString()
       };
       fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2), "utf8");
@@ -188,6 +191,7 @@ async function main() {
   const savedState = loadState();
   const processedTxHashes = savedState.processedTxHashes;
   const processedWithdrawalOrders = savedState.processedWithdrawalOrders;
+  const quarantinedWithdrawalOrders = savedState.quarantinedWithdrawalOrders;
   let lastCheckedL2Block = savedState.lastCheckedL2Block;
   let lastCheckedChainHeight = savedState.lastCheckedChainHeight;
 
@@ -312,13 +316,13 @@ async function main() {
         if (!processedSuccessfully) {
           // Si falló por desconexión o error transitorio, retroceder cursor para reintentar en el próximo sondeo (AUD-H0-06)
           lastCheckedL2Block = event.blockNumber > 0 ? event.blockNumber - 1 : lastCheckedL2Block;
-          saveState({ lastCheckedL2Block, lastCheckedChainHeight, processedTxHashes, processedWithdrawalOrders });
+          saveState({ lastCheckedL2Block, lastCheckedChainHeight, processedTxHashes, processedWithdrawalOrders, quarantinedWithdrawalOrders });
           return;
         }
       }
 
       lastCheckedL2Block = toBlock;
-      saveState({ lastCheckedL2Block, lastCheckedChainHeight, processedTxHashes, processedWithdrawalOrders });
+      saveState({ lastCheckedL2Block, lastCheckedChainHeight, processedTxHashes, processedWithdrawalOrders, quarantinedWithdrawalOrders });
     } catch (pollErr) {
       console.warn(`[ORACLE-INBOUND] Aviso en sondeo de eventos (${pollErr.message}), reintentando...`);
     } finally {
@@ -362,7 +366,7 @@ async function main() {
           if (block.withdrawals && block.withdrawals.length > 0) {
             for (const w of block.withdrawals) {
               const orderIdStr = w.order_id;
-              if (!orderIdStr || processedWithdrawalOrders.has(orderIdStr)) {
+              if (!orderIdStr || processedWithdrawalOrders.has(orderIdStr) || quarantinedWithdrawalOrders.has(orderIdStr)) {
                 continue;
               }
 
@@ -483,8 +487,8 @@ async function main() {
                   const fails = (orderFailures.get(orderIdStr) || 0) + 1;
                   orderFailures.set(orderIdStr, fails);
                   if (fails >= 3) {
-                    console.error(`[ORACLE-RELAYER] [CRÍTICO] Orden ${orderIdStr} aislada tras 3 intentos fallidos (${errMsg}). Desbloqueando cola (V4-05).`);
-                    processedWithdrawalOrders.add(orderIdStr);
+                    console.error(`[ORACLE-RELAYER] [CRÍTICO - CUARENTENA DLQ] Orden ${orderIdStr} aislada y colocada en CUARENTENA tras 3 intentos fallidos (${errMsg}). Desbloqueando cola sin marcar como procesada.`);
+                    quarantinedWithdrawalOrders.add(orderIdStr);
                   } else {
                     console.error(`[ORACLE-RELAYER] [REINTENTO ${fails}/3] Fallo transitorio al ejecutar withdraw en Arbitrum:`, errMsg);
                     blockSucceeded = false;
@@ -505,7 +509,7 @@ async function main() {
         }
 
         lastCheckedChainHeight = h;
-        saveState({ lastCheckedL2Block, lastCheckedChainHeight, processedTxHashes, processedWithdrawalOrders });
+        saveState({ lastCheckedL2Block, lastCheckedChainHeight, processedTxHashes, processedWithdrawalOrders, quarantinedWithdrawalOrders });
       }
     } catch (err) {
       console.warn(`[ORACLE-RELAYER] Aviso en sondeo de retiros (${err.message}).`);

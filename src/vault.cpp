@@ -130,8 +130,8 @@ ClaimReceipt Vault::claim_fees(Amount amount_to_claim, const std::string& destin
         throw std::invalid_argument("El monto a reclamar excede el límite protocolario MAX_TRANSACTION_AMOUNT.");
     }
 
-    if (destination_address.empty()) {
-        throw std::invalid_argument("La dirección de destino de tesorería no puede estar vacía.");
+    if (!is_valid_evm_address(destination_address)) {
+        throw std::invalid_argument("La dirección de destino de tesorería debe ser una dirección EVM válida (0x + 40 hex, distinta de cero).");
     }
 
     if (amount_to_claim > fee_pool_reserve_) {

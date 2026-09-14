@@ -752,6 +752,11 @@ void RpcServer::setup_routes() {
             auto body = json::parse(req.body);
             double amount_val = body.at("amount_usdt").get<double>();
             std::string treasury_addr = body.at("treasury_address").get<std::string>();
+            if (!is_valid_evm_address(treasury_addr)) {
+                res.status = 400;
+                res.set_content(json{{"error", "Direccion de tesoreria invalida: debe ser una direccion EVM valida (0x + 40 caracteres hex, distinta de cero)."}}.dump(2), "application/json");
+                return;
+            }
 
             Amount claim_amount = parse_usdt(amount_val);
             auto receipt = node_.claim_treasury_fees(claim_amount, treasury_addr);
