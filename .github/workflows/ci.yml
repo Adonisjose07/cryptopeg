@@ -12,7 +12,7 @@ on:
 jobs:
   security-autofix:
     name: One-shot security autofix
-    if: github.event_name == 'push' && github.event.head_commit.message == 'chore: apply security autofix batch'
+    if: "github.event_name == 'push' && github.event.head_commit.message == 'chore: apply security autofix batch'"
     runs-on: ubuntu-24.04
     permissions:
       contents: write
